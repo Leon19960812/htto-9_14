@@ -1,0 +1,5 @@
+[
+  { "radius": 2.0, "n_nodes": 13, "type": "outer" },
+  { "radius": 1.4, "n_nodes": 13, "type": "inner" }
+]
+
