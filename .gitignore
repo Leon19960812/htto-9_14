@@ -1,0 +1,25 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Generated results/artifacts
+results/
+Sequential_Convex_Programming/results/
+
+# OS-specific
+.DS_Store
+Thumbs.db

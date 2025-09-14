@@ -1,0 +1,68 @@
+class ConstraintBuilder:
+    """约束构建?""
+    
+    def __init__(self, optimizer_ref):
+        self.opt = optimizer_ref
+        self.geometry_params = GeometryParams()
+    
+    def build_geometry_constraints(self, theta: cp.Variable) -> List[cp.Constraint]:
+        """构建几何约束"""
+        constraints = []
+        
+        n_angles = theta.shape[0] if hasattr(theta, 'shape') else len(theta)
+        
+        # 单调性约?        if n_angles > 1:
+            constraints.append(
+                theta[1:] - theta[:-1] >= self.geometry_params.min_angle_spacing
+            )
+        
+        # 边界约束
+        constraints.append(theta[0] >= self.geometry_params.boundary_buffer)
+        constraints.append(theta[-1] <= np.pi - self.geometry_params.boundary_buffer)
+        
+        # 对称性约?        if n_angles > 1:
+            for i in range(n_angles // 2):
+                constraints.append(theta[i] + theta[n_angles - 1 - i] == np.pi)
+            
+            # 奇数节点的中间节点约?            if n_angles % 2 == 1:
+                mid_idx = n_angles // 2
+                constraints.append(theta[mid_idx] == np.pi / 2)
+        
+        return constraints
+    
+    def build_trust_region_constraint(self, theta: cp.Variable, theta_k: np.ndarray, 
+                                     trust_radius: float) -> cp.Constraint:
+        """构建信赖域约?""
+        return cp.norm(theta - theta_k, 2) <= trust_radius
+
+    def build_neighbor_move_limits(self, theta: cp.Variable, theta_k: np.ndarray) -> List[cp.Constraint]:
+        """为每个角度添加基于初始相邻间距的一步最大移动限?        约束形式?m_i <= theta_i - theta_k_i <= m_i
+        m_i = min(0.5*Δθ0_left, 0.5*Δθ0_right, neighbor_move_cap) - eps
+        边界点只使用可用的一侧相邻间距?        若未提供初始角（opt.initial_angles），则仅使用全局?neighbor_move_cap?        """
+        constraints: List[cp.Constraint] = []
+        n = len(theta_k)
+        gp = self.geometry_params
+        # 默认全部用全局?        m = np.full(n, gp.neighbor_move_cap, dtype=float)
+        if hasattr(self.opt, 'initial_angles') and self.opt.initial_angles is not None:
+            theta0 = np.array(self.opt.initial_angles, dtype=float)
+            if theta0.shape[0] == n:
+                # 计算初始相邻间距
+                d = np.diff(theta0)
+                # 对每?i 计算局部一半间?                for i in range(n):
+                    left = 1e9
+                    right = 1e9
+                    if i-1 >= 0 and i-1 < len(d):
+                        left = 0.5 * d[i-1]
+                    if i < len(d):
+                        right = 0.5 * d[i]
+                    local_cap = min(left, right)
+                    if not np.isfinite(local_cap):
+                        local_cap = gp.neighbor_move_cap
+                    m[i] = max(0.0, min(local_cap, gp.neighbor_move_cap) - gp.neighbor_move_eps)
+        # 生成盒约?        constraints.append(theta - theta_k <= m)
+        constraints.append(theta_k - theta <= m)
+        return constraints
+    
+    
+    
+
