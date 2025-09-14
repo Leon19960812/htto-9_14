@@ -18,13 +18,13 @@
 - [x] 代码：NodeMerger 无层化（删除字典式 theta，统一一维 theta）
 
 ## 进行中
-- [ ] 在优化器注入 `PolarGeometry`（适配为现有装配/载荷接口字段）
+- [x] 在优化器注入 `PolarGeometry`（由 `TrussSystemInitializer` 构建并挂载）
 - [ ] 清理 `algorithm_modules.py` 残留的分层判断与无用函数块
 - [ ] 引入并使用 `theta_node_ids`（一维 θ 到 node_id 的映射），统一坐标写回、步长帽与融合
 
 ## 待办（下一步）
 - [ ] 自适应 `theta_move_caps`：基于 incident 最短杆长计算（已初步接入，继续稳健化）
-- [ ] 坐标更新统一走 `PolarGeometry.update_from_optimization` / `get_cartesian_coordinates`
+- [x] 坐标更新统一走 `PolarGeometry.update_from_optimization` / `get_cartesian_coordinates`（通过 `update_from_partial_optimization` 适配 `load_nodes` 顺序）
 - [ ] `node_merger.py` 收敛到一维 theta + node_id 映射（删除字典式路径）
 - [ ] 渐进弃用 `TrussSystemInitializer` 的 ground structure 生成
 
@@ -34,6 +34,19 @@
 
 ## 备注
 - 不再引入“层”的运行时概念；所有约束与数据结构均以一维 theta 为中心
+
+## 进度更新（2025-09-14）
+- 已完成
+  - 强制使用 MOSEK（cvxpy），移除 ECOS/SCS 回退；失败直接报错。
+  - `polar_geometry.py`：严格使用 shapely + gcd 生成 ground structure，删除简化几何包含回退。
+  - `truss_system_initializer.py`：重写为最小骨架，几何来源统一 `PolarGeometry`；暴露 `polar_geometry` 给优化器。
+  - 优化器已通过适配层切换到 `PolarGeometry` 坐标更新：
+    - 使用 `polar_geometry.update_from_partial_optimization(theta, geometry.load_nodes)`
+    - 然后 `polar_geometry.get_cartesian_coordinates()` 作为装配坐标。
+
+- 待办/风险
+  - `theta_node_ids`：需要对齐优化器的 θ 顺序与 `PolarGeometry` 的非固定节点顺序，完成后可以改为 `update_from_optimization` 全量更新。
+  - 融合后需重建 `theta_node_ids` 并刷新 `load_nodes/DOF/element_lengths/单位刚度核`；本期将在节点融合回合后触发。
 # 极坐标重构开发跟踪（更新）
 
 > TODO NOW (open this file after restart)

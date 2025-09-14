@@ -3,7 +3,6 @@ import matplotlib.pyplot as plt
 import time
 import os
 import warnings
-from truss_system_initializer import TrussSystemInitializer
 
 # 抑制libpng警告
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -12,6 +11,36 @@ warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 class TrussVisualization:
     def __init__(self):
         pass
+
+    def _get_support_nodes(self, optimizer):
+        """Detect two support nodes: prefer inner ring endpoints by angle.
+
+        Fallback order: inner_nodes -> outer_nodes -> load_nodes -> [0, n-1].
+        """
+        import numpy as _np
+        try:
+            coords = _np.asarray(getattr(optimizer, 'nodes', None), dtype=float)
+            n_nodes = coords.shape[0] if coords is not None else int(getattr(optimizer, 'n_nodes', 0))
+            inner = getattr(optimizer, 'inner_nodes', []) or []
+            outer = getattr(optimizer, 'outer_nodes', []) or []
+            if len(inner) >= 2:
+                cand = _np.asarray(inner, dtype=int)
+            elif len(outer) >= 2:
+                cand = _np.asarray(outer, dtype=int)
+            else:
+                ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', [])) or []
+                if len(ln) >= 2:
+                    cand = _np.asarray(ln, dtype=int)
+                else:
+                    cand = _np.arange(n_nodes, dtype=int) if n_nodes >= 2 else _np.asarray([], dtype=int)
+            if cand.size >= 2 and coords is not None and coords.size:
+                ang = _np.arctan2(coords[cand, 1], coords[cand, 0])
+                i_min = int(cand[int(_np.argmin(ang))])
+                i_max = int(cand[int(_np.argmax(ang))])
+                return [i_min, i_max] if i_min != i_max else [i_min]
+        except Exception:
+            pass
+        return []
 
     def visualize_results(self, optimizer):
         """可视化优化结果"""
@@ -67,8 +96,7 @@ class TrussVisualization:
             original_coords = np.array(optimizer.nodes)
             
             # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
-            ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
-            support_nodes = [ln[0], ln[-1]] if len(ln) >= 2 else []
+            support_nodes = self._get_support_nodes(optimizer)
             
             # 非支撑节点
             non_support_nodes = [i for i in range(len(original_coords)) if i not in support_nodes]
@@ -354,21 +382,9 @@ Verification:
                 label='Load Points', zorder=5)
         
         # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
-        ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
-        support_nodes = [ln[0], ln[-1]] if len(ln) >= 2 else []
+        support_nodes = self._get_support_nodes(optimizer)
         
-        # 内层节点（绿色，排除支撑节点）
-        # no inner layer in runtime
-        inner_nodes_non_support = []
-            ax.scatter(inner_coords[:, 0], inner_coords[:, 1], 
-                    c='green', s=40, marker='o', edgecolors='black', 
-                    label='Inner Nodes', zorder=5)
-        
-        # 中间层节点（如果存在，也用绿色，排除支撑节点）
-        # no middle layer in runtime
-                ax.scatter(middle_coords[:, 0], middle_coords[:, 1], 
-                        c='green', s=40, marker='o', edgecolors='black', 
-                        zorder=5)  # 不单独添加label，与内层节点归为一类
+        # Inner/middle layers are not drawn in runtime; skip separate scatter.
         
         # 绘制支撑节点
         support_coords = nodes_array[support_nodes]
@@ -419,13 +435,12 @@ Verification:
         # 绘制结构轮廓
         for i, ((node1, node2), area) in enumerate(zip(optimizer.elements, optimizer.final_areas)):
             if area > optimizer.removal_threshold:
-                x1, y1 = optimizer.nodes[node1]
-                x2, y2 = optimizer.nodes[node2]
+                x1, y1 = nodes_array[node1]
+                x2, y2 = nodes_array[node2]
                 ax.plot([x1, x2], [y1, y2], 'k-', alpha=0.3, linewidth=0.5)
         
         # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
-        ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
-        support_nodes = [ln[0], ln[-1]] if len(ln) >= 2 else []
+        support_nodes = self._get_support_nodes(optimizer)
         
         # 绘制节点
         load_nodes = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
@@ -433,15 +448,7 @@ Verification:
         ax.scatter(outer_coords[:, 0], outer_coords[:, 1], 
                   c='red', s=40, marker='o', edgecolors='black', alpha=0.7)
         
-        # 内层节点（排除支撑节点）
-        inner_nodes_non_support = []
-            ax.scatter(inner_coords[:, 0], inner_coords[:, 1], 
-                      c='green', s=30, marker='o', edgecolors='black', alpha=0.7)
-        
-        # 中间层节点（如果存在，排除支撑节点）
-        # no middle layer
-                ax.scatter(middle_coords[:, 0], middle_coords[:, 1], 
-                          c='green', s=30, marker='o', edgecolors='black', alpha=0.7)
+        # Inner/middle layers are not drawn in runtime; skip.
         
         ax.set_xlim(-1.2 * optimizer.radius, 1.2 * optimizer.radius)
         ax.set_ylim(-0.2 * optimizer.radius, 1.2 * optimizer.radius)
@@ -520,10 +527,8 @@ Verification:
         # 原始节点坐标
         original_coords = np.array(optimizer.nodes)
         
-        # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
-        support_nodes = [optimizer.inner_nodes[0], optimizer.inner_nodes[-1]]
-        if hasattr(optimizer, 'middle_nodes') and optimizer.middle_nodes:
-            support_nodes.extend([optimizer.middle_nodes[0], optimizer.middle_nodes[-1]])
+        # 支撑节点（按内圈两端优先）
+        support_nodes = self._get_support_nodes(optimizer)
         
         # 非支撑节点
         non_support_nodes = [i for i in range(len(original_coords)) if i not in support_nodes]

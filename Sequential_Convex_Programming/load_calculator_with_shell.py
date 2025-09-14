@@ -6,7 +6,7 @@ Date: 2025/9/3
 import numpy as np
 import math
 from typing import List, Optional
-from shell_fea_2d import Shell2DFEA, ShellMaterialData
+from .shell_fea_2d import Shell2DFEA, ShellMaterialData
 
 class LoadCalculatorWithShell:
     """
@@ -148,7 +148,7 @@ class LoadCalculatorWithShell:
         base_pressure = self.material_data.rho_water * self.material_data.g * depth
         
         # 构建LoadData对象
-        from truss_system_initializer import LoadData
+        from .truss_system_initializer import LoadData
         return LoadData(
             load_vector=load_vector,
             base_pressure=base_pressure,
@@ -224,7 +224,7 @@ def integrate_shell_into_existing_system():
     print("=" * 50)
     
     # 1. 模拟你的现有系统
-    from Sequential_Convex_Programming.truss_system_initializer import TrussSystemInitializer
+    from .truss_system_initializer import TrussSystemInitializer
     
     # 创建初始化器（使用你的现有代码）
     initializer = TrussSystemInitializer(

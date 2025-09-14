@@ -15,7 +15,7 @@ import itertools
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 from math import gcd
-from shapely.geometry import Point, LineString, Polygon
+from shapely.geometry import LineString, Polygon
 import matplotlib.pyplot as plt
 
 
@@ -185,9 +185,10 @@ class PolarGeometry:
     
     
     def _create_ring_polygon(self):
-        """创建基于实际节点的环形区域
-        
-        使用外层和内层的实际节点坐标构建边界，确保边界连接被正确包含
+        """创建基于实际节点的环形区域（严格依赖 shapely，多边形无回退）。
+
+        使用外层和内层的实际节点坐标构建边界；若多边形无效则尝试
+        使用 buffer(0) 修复；仍无效则抛出错误，不再使用任意简化策略。
         """
         # 获取外层和内层节点
         outer_nodes = [node for node in self.nodes if node.node_type == 'outer']
@@ -208,24 +209,13 @@ class PolarGeometry:
         for node in inner_nodes:
             boundary_points.append((node.x, node.y))
         
-        # 创建多边形
-        try:
-            ring_polygon = Polygon(boundary_points)
-            if not ring_polygon.is_valid:
-                # 如果多边形无效，尝试修复
-                ring_polygon = ring_polygon.buffer(0)
-            return ring_polygon
-        except Exception:
-            # 备用方案：创建简单的数学圆环
-            radii = [ring['radius'] for ring in self.config.rings]
-            max_radius = max(radii)
-            min_radius = min(radii)
-            
-            from shapely.geometry import Point
-            center = Point(0, 0)
-            outer_circle = center.buffer(max_radius)
-            inner_circle = center.buffer(min_radius)
-            return outer_circle.difference(inner_circle)
+        # 创建多边形（无简化回退）
+        ring_polygon = Polygon(boundary_points)
+        if not ring_polygon.is_valid:
+            ring_polygon = ring_polygon.buffer(0)
+        if (ring_polygon is None) or (not ring_polygon.is_valid) or ring_polygon.is_empty:
+            raise RuntimeError("Failed to construct a valid ring polygon with shapely.")
+        return ring_polygon
 
 
     
@@ -282,6 +272,21 @@ class PolarGeometry:
         
         # 重新生成连接（如果需要）
         self._update_connections()
+
+    def update_from_partial_optimization(self, theta_new: np.ndarray, node_ids: List[int]):
+        """Update a subset of free nodes' angles using provided node ids.
+
+        This is a convenience adapter to integrate with optimizers that optimize
+        only a selected runtime node set (e.g., load_nodes). Fixed nodes in the
+        subset are ignored. After update, element lengths are refreshed.
+        """
+        n = min(len(theta_new), len(node_ids))
+        for i in range(n):
+            nid = int(node_ids[i])
+            if 0 <= nid < len(self.nodes):
+                if not self.nodes[nid].is_fixed:
+                    self.nodes[nid].theta = float(theta_new[i])
+        self._update_connections()
     
     def _update_connections(self):
         """更新连接（重新计算长度等）"""
@@ -310,6 +315,15 @@ class PolarGeometry:
             coords.append([node.x, node.y])
         
         return np.array(coords)
+
+    def get_free_node_ids(self) -> List[int]:
+        """Return node ids for non-fixed nodes in the same order used by
+        get_optimization_variables()."""
+        ids: List[int] = []
+        for node in self.nodes:
+            if not node.is_fixed:
+                ids.append(node.id)
+        return ids
     
     def visualize_ground_structure(self, save_path: str = None, show_ring_boundary: bool = True):
         """可视化地面结构

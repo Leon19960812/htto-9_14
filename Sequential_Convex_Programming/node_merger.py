@@ -74,6 +74,38 @@ class NodeMerger:
         self._validate_merge_result(result)
         return result
 
+    def _validate_merge_result(self, result: MergeResult) -> None:
+        """Lightweight sanity checks after merge to avoid downstream crashes.
+
+        Does not raise by default; prints warnings if inconsistencies are found.
+        """
+        try:
+            geom = result.geometry_updated
+            # Check node/element counts
+            if hasattr(geom, 'nodes') and hasattr(geom, 'n_nodes'):
+                if int(geom.n_nodes) != len(geom.nodes):
+                    print(f"[NodeMerger] Warning: n_nodes({geom.n_nodes}) != len(nodes)({len(geom.nodes)})")
+            if hasattr(geom, 'elements') and hasattr(geom, 'n_elements'):
+                if int(geom.n_elements) != len(geom.elements):
+                    print(f"[NodeMerger] Warning: n_elements({geom.n_elements}) != len(elements)({len(geom.elements)})")
+            # Check DOFs
+            if hasattr(geom, 'n_dof'):
+                fd = getattr(geom, 'fixed_dofs', []) or []
+                fr = getattr(geom, 'free_dofs', []) or []
+                if (len(fd) + len(fr)) != int(geom.n_dof):
+                    print(f"[NodeMerger] Warning: DOF mismatch fixed({len(fd)})+free({len(fr)}) != n_dof({geom.n_dof})")
+            # Check areas size aligns with new elements
+            if result.A_updated is not None and hasattr(geom, 'n_elements'):
+                if len(result.A_updated) != int(geom.n_elements):
+                    print(f"[NodeMerger] Warning: len(A_updated)({len(result.A_updated)}) != n_elements({geom.n_elements})")
+            # Theta size plausibility (aligned to optimized node set if available)
+            ln = getattr(geom, 'load_nodes', []) or []
+            if result.theta_updated is not None and ln:
+                if len(result.theta_updated) > len(ln):
+                    print(f"[NodeMerger] Warning: len(theta_updated)({len(result.theta_updated)}) > len(load_nodes)({len(ln)})")
+        except Exception as e:
+            print(f"[NodeMerger] Validation skipped due to error: {e}")
+
     def _create_merge_plan(self, merge_groups, theta, A):
         plan = MergePlan(node_merges=[], element_removals=set(), target_coords={}, target_angles={})
         # Determine optimized node ids list
