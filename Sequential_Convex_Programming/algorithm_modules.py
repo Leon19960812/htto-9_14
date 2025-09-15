@@ -311,6 +311,9 @@ class SubproblemSolver:
         coords_k = self.opt._update_node_coordinates(theta_k)
         elen_k, edir_k = self.opt._compute_element_geometry(coords_k)
         E = float(getattr(self.opt.material_data, 'E_steel', 1.0))
+        # Scale loads to improve conditioning when K uses 1/L kernels
+        import numpy as _np
+        f_scale = 1.0 / max(float(_np.sqrt(E)), 1.0)
 
         # Build per-element unit global stiffness matrices at theta_k (A=1)
         n_dof = int(self.opt.n_dof)
@@ -318,7 +321,8 @@ class SubproblemSolver:
         for i, (n1, n2) in enumerate(self.opt.geometry.elements):
             L = float(max(elen_k[i], 1e-12))
             c, s = float(edir_k[i][0]), float(edir_k[i][1])
-            k_coeff = E / L
+            # Use unit kernel normalized by 1/L (pull E out)
+            k_coeff = 1.0 / L
             k_local = k_coeff * np.array([
                 [c*c, c*s, -c*c, -c*s],
                 [c*s, s*s, -c*s, -s*s],
@@ -344,7 +348,7 @@ class SubproblemSolver:
 
         # f at theta_k on free DOFs
         f_full_k = self.opt._compute_load_vector(coords_k)
-        fff_k = f_full_k[free]
+        fff_k = f_full_k[free] * f_scale
 
         # Finite-difference gradients w.r.t theta (for K and f)
         fd_h = float(getattr(self.opt.optimization_params, 'gradient_fd_step', 1e-6))
@@ -360,7 +364,7 @@ class SubproblemSolver:
                 for i, (n1, n2) in enumerate(self.opt.geometry.elements):
                     L = float(max(elen_j[i], 1e-12))
                     c, s = float(edir_j[i][0]), float(edir_j[i][1])
-                    k_coeff = E / L
+                    k_coeff = 1.0 / L
                     k_local = k_coeff * np.array([
                         [c*c, c*s, -c*c, -c*s],
                         [c*s, s*s, -c*s, -s*s],
@@ -378,7 +382,7 @@ class SubproblemSolver:
 
                 # f gradient
                 f_full_j = self.opt._compute_load_vector(coords_j)
-                ftheta_ff.append((f_full_j[free] - fff_k) / fd_h)
+                ftheta_ff.append(((f_full_j[free] * f_scale) - fff_k) / fd_h)
 
         # Decision variables
         theta = cp.Variable(n) if n > 0 else None
@@ -441,7 +445,8 @@ class SubproblemSolver:
 
             # LMI via Schur complement
             # [K_lin, f_lin; f_lin^T, t] >= 0
-            M11 = K_lin
+            # Symmetrize K_lin for PSD robustness
+            M11 = 0.5 * (K_lin + K_lin.T)
             M12 = cp.reshape(f_lin, (n_free, 1))
             M21 = cp.reshape(f_lin, (1, n_free))
             M22 = cp.reshape(t, (1, 1))

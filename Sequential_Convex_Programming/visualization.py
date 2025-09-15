@@ -13,31 +13,47 @@ class TrussVisualization:
         pass
 
     def _get_support_nodes(self, optimizer):
-        """Detect two support nodes: prefer inner ring endpoints by angle.
+        """Detect fixed supports as arc endpoints per ring.
 
-        Fallback order: inner_nodes -> outer_nodes -> load_nodes -> [0, n-1].
+        Preference:
+        - inner ring endpoints if available
+        - plus middle ring endpoints if available
+        Fallback: outer ring endpoints -> load_nodes endpoints -> [0, n-1].
+        Returns a list (may contain 2 or 4 ids, unique-preserved order).
         """
         import numpy as _np
         try:
             coords = _np.asarray(getattr(optimizer, 'nodes', None), dtype=float)
             n_nodes = coords.shape[0] if coords is not None else int(getattr(optimizer, 'n_nodes', 0))
-            inner = getattr(optimizer, 'inner_nodes', []) or []
-            outer = getattr(optimizer, 'outer_nodes', []) or []
-            if len(inner) >= 2:
-                cand = _np.asarray(inner, dtype=int)
-            elif len(outer) >= 2:
-                cand = _np.asarray(outer, dtype=int)
-            else:
-                ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', [])) or []
-                if len(ln) >= 2:
-                    cand = _np.asarray(ln, dtype=int)
-                else:
-                    cand = _np.arange(n_nodes, dtype=int) if n_nodes >= 2 else _np.asarray([], dtype=int)
-            if cand.size >= 2 and coords is not None and coords.size:
+            def endpoints(ids):
+                if not ids or len(ids) < 2 or coords is None or not coords.size:
+                    return []
+                cand = _np.asarray(ids, dtype=int)
                 ang = _np.arctan2(coords[cand, 1], coords[cand, 0])
                 i_min = int(cand[int(_np.argmin(ang))])
                 i_max = int(cand[int(_np.argmax(ang))])
                 return [i_min, i_max] if i_min != i_max else [i_min]
+
+            inner = getattr(optimizer, 'inner_nodes', []) or []
+            middle = getattr(optimizer, 'middle_nodes', []) or []
+            outer = getattr(optimizer, 'outer_nodes', []) or []
+
+            sup = []
+            sup += endpoints(inner)
+            sup += endpoints(middle)
+            if not sup:
+                sup += endpoints(outer)
+            if not sup:
+                ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', [])) or []
+                sup += endpoints(ln)
+            # Unique-preserve
+            seen = set()
+            sup_u = []
+            for nid in sup:
+                if nid not in seen:
+                    sup_u.append(nid); seen.add(nid)
+            if sup_u:
+                return sup_u
         except Exception:
             pass
         return []
@@ -325,7 +341,7 @@ Verification:
         
         print("=" * 60)
     
-    def _plot_structure(self, optimizer, ax, areas, title, linewidth_mode='variable', node_coords=None):
+    def _plot_structure(self, optimizer, ax, areas, title, linewidth_mode='variable', node_coords=None, min_area_to_draw=None):
         """绘制结构"""
         if node_coords is None:
             node_coords = np.array(optimizer.nodes)
@@ -348,9 +364,10 @@ Verification:
                             fill=False, color='gray', linestyle='--', alpha=0.3)
             ax.add_patch(middle_arc)
         
-        # 绘制单元（保持原有逻辑不变）
+        # 绘制单元（支持可选的最小绘制面积覆盖阈值）
+        thr = optimizer.removal_threshold if (min_area_to_draw is None) else float(min_area_to_draw)
         for i, ((node1, node2), area) in enumerate(zip(optimizer.elements, areas)):
-            if area > optimizer.removal_threshold:
+            if area > thr:
                 x1, y1 = node_coords[node1]
                 x2, y2 = node_coords[node2]
                 
@@ -365,7 +382,7 @@ Verification:
                     linewidth = 0.8 + 2.0 * area_ratio
                     color = 'darkblue'
                 else:  # 'variable'
-                    linewidth = 1+ 1 * area_ratio
+                    linewidth = 0.5 + 2.0 * area_ratio
                     color = 'darkblue'
                 
                 ax.plot([x1, x2], [y1, y2], color=color, 
@@ -384,8 +401,21 @@ Verification:
         # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
         support_nodes = self._get_support_nodes(optimizer)
         
-        # Inner/middle layers are not drawn in runtime; skip separate scatter.
-        
+        # 其他节点（非荷载且非支撑）
+        try:
+            n_all = nodes_array.shape[0]
+            mask_other = np.ones(n_all, dtype=bool)
+            mask_other[np.asarray(load_nodes, dtype=int)] = False
+            if support_nodes:
+                mask_other[np.asarray(support_nodes, dtype=int)] = False
+            other_coords = nodes_array[mask_other]
+            if other_coords.size:
+                ax.scatter(other_coords[:, 0], other_coords[:, 1],
+                           c='green', s=30, marker='o', edgecolors='black', alpha=0.8,
+                           label='Other Nodes', zorder=4)
+        except Exception:
+            pass
+
         # 绘制支撑节点
         support_coords = nodes_array[support_nodes]
         ax.scatter(support_coords[:, 0], support_coords[:, 1], 
@@ -442,11 +472,25 @@ Verification:
         # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
         support_nodes = self._get_support_nodes(optimizer)
         
-        # 绘制节点
+        # 绘制荷载节点
         load_nodes = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
         outer_coords = nodes_array[load_nodes]
         ax.scatter(outer_coords[:, 0], outer_coords[:, 1], 
                   c='red', s=40, marker='o', edgecolors='black', alpha=0.7)
+        
+        # 绘制其他节点（非荷载且非支撑）
+        try:
+            n_all = nodes_array.shape[0]
+            mask_other = np.ones(n_all, dtype=bool)
+            mask_other[np.asarray(load_nodes, dtype=int)] = False
+            if support_nodes:
+                mask_other[np.asarray(support_nodes, dtype=int)] = False
+            other_coords = nodes_array[mask_other]
+            if other_coords.size:
+                ax.scatter(other_coords[:, 0], other_coords[:, 1],
+                           c='green', s=25, marker='o', edgecolors='black', alpha=0.8)
+        except Exception:
+            pass
         
         # Inner/middle layers are not drawn in runtime; skip.
         

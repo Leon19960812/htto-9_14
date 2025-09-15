@@ -183,28 +183,34 @@ class ConstraintCalculator:
         )
 
     def setup_boundary_conditions(self, geometry: GeometryData) -> Tuple[List[int], List[int]]:
-        # Prefer inner ring endpoints as fixed supports
+        # Fixed supports at arc endpoints for available rings:
+        # - Always inner ring endpoints if available
+        # - Additionally middle ring endpoints if available
+        # Fallback order remains: outer -> load_nodes -> [0, n-1]
         fixed_nodes: List[int] = []
         try:
             coords = np.asarray(geometry.nodes, dtype=float)
-            # Candidate indices: inner ring if available; else outer; else load_nodes
-            candidates = []
+            def _endpoints(node_ids: List[int]) -> List[int]:
+                if not node_ids or len(node_ids) < 2:
+                    return []
+                arr = np.asarray(node_ids, dtype=int)
+                ang = np.arctan2(coords[arr, 1], coords[arr, 0])
+                i_min = int(arr[int(np.argmin(ang))])
+                i_max = int(arr[int(np.argmax(ang))])
+                return [i_min, i_max] if i_min != i_max else [i_min]
+
             inner = getattr(geometry, 'inner_nodes', []) or []
+            middle = getattr(geometry, 'middle_nodes', []) or []
             outer = getattr(geometry, 'outer_nodes', []) or []
-            if len(inner) >= 2:
-                candidates = list(inner)
-            elif len(outer) >= 2:
-                candidates = list(outer)
-            else:
-                ln = getattr(geometry, 'load_nodes', []) or []
-                if len(ln) >= 2:
-                    candidates = list(ln)
-            if candidates:
-                cand = np.asarray(candidates, dtype=int)
-                ang = np.arctan2(coords[cand, 1], coords[cand, 0])
-                i_min = int(cand[int(np.argmin(ang))])
-                i_max = int(cand[int(np.argmax(ang))])
-                fixed_nodes = [i_min, i_max] if i_min != i_max else [i_min]
+
+            # Collect endpoints from inner and middle rings if present
+            fixed_nodes.extend(_endpoints(inner))
+            fixed_nodes.extend(_endpoints(middle))
+
+            # If nothing collected, fallback to outer/load_nodes
+            if not fixed_nodes:
+                cand = outer or (getattr(geometry, 'load_nodes', []) or [])
+                fixed_nodes.extend(_endpoints(cand))
         except Exception:
             fixed_nodes = []
         # Final fallback: first and last index in nodes list
@@ -226,7 +232,7 @@ class ConstraintCalculator:
 class TrussSystemInitializer:
     """Unified initializer using PolarGeometry and clean helpers."""
 
-    def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2, E_steel=210e9, enable_middle_layer=False, middle_layer_ratio=0.85, use_polar: bool = True, polar_config: dict = None):
+    def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2, E_steel=210e9, enable_middle_layer=False, middle_layer_ratio=0.85, use_polar: bool = True, polar_config: dict = None, simple_loads: bool = False):
         # Store basic parameters
         self.radius = float(radius)
         self.n_sectors = int(n_sectors)
@@ -244,7 +250,7 @@ class TrussSystemInitializer:
             g=9.81,
             A_min=1e-6,
             A_max=1e-2,
-            removal_threshold=1e-5,
+            removal_threshold=1e-3,
         )
 
         # Calculators
@@ -259,7 +265,13 @@ class TrussSystemInitializer:
                 "n_radial": 2,
                 "E_shell": float(self.material_data.E_steel),
             }
-            self.load_calc = LoadCalculatorWithShell(self.material_data, enable_shell=True, shell_params=shell_params)
+            self.use_simple_loads = bool(simple_loads)
+            self.load_calc = LoadCalculatorWithShell(
+                self.material_data,
+                enable_shell=(not self.use_simple_loads),
+                shell_params=shell_params,
+                simple_mode=self.use_simple_loads,
+            )
         except Exception as e:
             raise ImportError(f"LoadCalculatorWithShell is required: {e}")
         self.stiffness_calc = StiffnessCalculator(self.material_data)
@@ -367,10 +379,14 @@ class TrussSystemInitializer:
         print(f"Depth: {self.depth} m, Pressure: {self.base_pressure/1000:.1f} kPa")
         print(f"Volume fraction: {self.volume_fraction:.3f}")
         print(f"Nodes: {self.n_nodes}, Elements: {self.n_elements}, DOF: {self.n_dof}")
-        print(f"Load nodes: {len(getattr(self.geometry, 'load_nodes', []))}")
         ln = getattr(self.geometry, 'load_nodes', [])
-        if len(ln) >= 2:
-            print(f"  Fixed nodes: {[ln[0], ln[-1]]}")
+        print(f"Load nodes: {len(ln)}")
+        # Report actual support nodes derived from fixed DOFs (not load endpoints)
+        try:
+            sup_nodes = sorted(set(int(d // 2) for d in self.fixed_dofs))
+            print(f"  Support nodes: {sup_nodes}")
+        except Exception:
+            pass
         print(f"  Fixed DOFs: {len(self.fixed_dofs)}  Free DOFs: {len(self.free_dofs)}")
 
     # Delegation to node merger utilities

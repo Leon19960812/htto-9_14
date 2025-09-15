@@ -11,4 +11,9 @@ from Sequential_Convex_Programming.cli import main
 
 if __name__ == '__main__':
     sys.exit(main())
-# python run_scp.py --radius 2.0 --n-sectors 12 --inner-ratio 0.6 --depth 10 --volume-fraction 0.2 --max-iterations 10 --save-figs results
+# sdp固定几何
+# python run_scp.py --radius 5.0 --n-sectors 16 --inner-ratio 0.5 --enable-middle-layer --middle-layer-ratio 0.7 --volume-fraction 0.5 --single-subproblem --sdp-fixed-geometry --simple-loads --sdp-reg-eps 1e-8 --sdp-lmi-eps 1e-7 --sdp-verbose --save-figs results_fixed_simple   
+# sdp子问题
+# python run_scp.py --radius 5.0 --n-sectors 16 --inner-ratio 0.5 --enable-middle-layer --middle-layer-ratio 0.7 --volume-fraction 0.3 --single-subproblem --simple-loads --save-figs results_step_simple
+# scp
+# python run_scp.py --radius 5.0 --n-sectors 16 --inner-ratio 0.5 --enable-middle-layer --middle-layer-ratio 0.7 --volume-fraction 0.3 --max-iterations 10 --simple-loads --save-figs results_scp_simple 

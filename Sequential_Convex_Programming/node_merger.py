@@ -32,6 +32,31 @@ class NodeMerger:
         self.radius = float(radius)
         self.constraint_calc = constraint_calc
 
+    def _get_support_nodes(self) -> List[int]:
+        """Prefer inner ring endpoints by angle; fallback to outer/load nodes."""
+        import numpy as _np
+        try:
+            coords = _np.asarray(getattr(self.geometry, 'nodes', []), dtype=float)
+            inner = getattr(self.geometry, 'inner_nodes', []) or []
+            outer = getattr(self.geometry, 'outer_nodes', []) or []
+            if len(inner) >= 2:
+                cand = _np.asarray(inner, dtype=int)
+            elif len(outer) >= 2:
+                cand = _np.asarray(outer, dtype=int)
+            else:
+                ln = getattr(self.geometry, 'load_nodes', []) or []
+                cand = _np.asarray(ln, dtype=int) if len(ln) >= 2 else _np.asarray([], dtype=int)
+            if cand.size >= 2 and coords.size:
+                ang = _np.arctan2(coords[cand, 1], coords[cand, 0])
+                i_min = int(cand[int(_np.argmin(ang))])
+                i_max = int(cand[int(_np.argmax(ang))])
+                return [i_min, i_max] if i_min != i_max else [i_min]
+        except Exception:
+            pass
+        # final fallback
+        n = int(getattr(self.geometry, 'n_nodes', 0))
+        return [0, n-1] if n >= 2 else []
+
     def group_nodes_by_radius(self, theta: np.ndarray, radius: float = None) -> List[List[int]]:
         if radius is None:
             radius = 0.5
@@ -108,6 +133,7 @@ class NodeMerger:
 
     def _create_merge_plan(self, merge_groups, theta, A):
         plan = MergePlan(node_merges=[], element_removals=set(), target_coords={}, target_angles={})
+        support_nodes = set(self._get_support_nodes())
         # Determine optimized node ids list
         if hasattr(self.geometry, 'load_nodes') and self.geometry.load_nodes:
             node_ids = list(self.geometry.load_nodes[:len(theta)])
@@ -115,13 +141,24 @@ class NodeMerger:
             node_ids = list(range(min(len(theta), getattr(self.geometry, 'n_nodes', len(theta)))))
 
         for group in merge_groups:
-            # choose representative as the minimal id for determinism
-            target_node = min(group)
+            # choose representative: if group contains support node, keep it; otherwise minimal id
+            target_node = None
+            for nid in group:
+                if nid in support_nodes:
+                    target_node = nid
+                    break
+            if target_node is None:
+                target_node = min(group)
             merged_nodes = [n for n in group if n != target_node]
             w_angle = self._compute_weighted_angle(group, node_ids, theta, A)
             plan.node_merges.append((target_node, merged_nodes))
-            plan.target_angles[target_node] = w_angle
-            plan.target_coords[target_node] = [self.radius * np.cos(w_angle), self.radius * np.sin(w_angle)]
+            # If target is support, keep its original coordinate (do not move support)
+            if target_node in support_nodes and 0 <= target_node < len(self.geometry.nodes):
+                plan.target_angles[target_node] = None
+                plan.target_coords[target_node] = list(self.geometry.nodes[target_node])
+            else:
+                plan.target_angles[target_node] = w_angle
+                plan.target_coords[target_node] = [self.radius * np.cos(w_angle), self.radius * np.sin(w_angle)]
             for m in merged_nodes:
                 for eid, (n1, n2) in enumerate(self.geometry.elements):
                     if n1 == m or n2 == m:

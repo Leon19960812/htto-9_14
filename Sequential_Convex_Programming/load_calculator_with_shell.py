@@ -13,7 +13,7 @@ class LoadCalculatorWithShell:
         载荷计算器
     """
     
-    def __init__(self, material_data, enable_shell=True, shell_params=None):
+    def __init__(self, material_data, enable_shell=True, shell_params=None, simple_mode: bool = False):
         """
         初始化载荷计算器
         
@@ -28,15 +28,20 @@ class LoadCalculatorWithShell:
         """
         self.material_data = material_data
         self.enable_shell = enable_shell
+        self.simple_mode = bool(simple_mode)
         
         # 壳体FEA模块
         self.shell_fea = None
         
-        if enable_shell and shell_params:
+        if enable_shell and shell_params and not self.simple_mode:
             self._initialize_shell_fea(shell_params)
         
         print(f"LoadCalculator initialized:")
-        print(f"  Shell computation: {'Enabled' if self.enable_shell and self.shell_fea else 'Disabled'}")
+        mode_str = (
+            'Shell' if (self.enable_shell and self.shell_fea and not self.simple_mode) else (
+                'SimpleHydrostatic' if self.simple_mode else 'Disabled')
+        )
+        print(f"  Mode: {mode_str}")
     
     def _initialize_shell_fea(self, shell_params):
         """初始化壳体FEA模块"""
@@ -88,9 +93,13 @@ class LoadCalculatorWithShell:
         node_coords : np.ndarray
             更新后的节点坐标
         """
+        # Simple mode fallback
+        if self.simple_mode:
+            return self._compute_simple_loads(geometry, depth, radius, node_coords)
+
         if not self.enable_shell or self.shell_fea is None:
             raise RuntimeError("Shell FEA is required but not initialized")
-            
+
         if node_coords is None:
             raise ValueError("node_coords is required for dynamic shell FEA calculation")
             
@@ -161,9 +170,10 @@ class LoadCalculatorWithShell:
         
         这是你原有代码中用于SCP迭代的接口
         """
+        if self.simple_mode:
+            return self._compute_simple_load_vector(node_coords, outer_nodes, depth)
         if not self.enable_shell or self.shell_fea is None:
             raise RuntimeError("Shell FEA is required but not initialized")
-            
         return self._compute_shell_load_vector(node_coords, outer_nodes, depth)
     
     def _compute_shell_load_vector(self, node_coords, outer_nodes, depth):
@@ -200,6 +210,63 @@ class LoadCalculatorWithShell:
         except Exception as e:
             print(f"Shell load calculation failed: {e}")
             raise RuntimeError(f"Shell load calculation failed: {e}")
+
+    # ---------------------------
+    # Simple hydrostatic loads
+    # ---------------------------
+    def _compute_simple_loads(self, geometry, depth, radius, node_coords):
+        """Compute simple hydrostatic nodal loads: per-node F_i = ρ g h_i.
+
+        - h_i = max(0, depth - y_i) using current node y
+        - Direction strictly radial inward at each load node
+        - No angular redistribution (one node, one force)
+        """
+        coords = np.asarray(node_coords, dtype=float)
+        ln = list(getattr(geometry, 'load_nodes', []))
+        if not ln:
+            return self._empty_load_data(depth)
+
+        rho_g = float(self.material_data.rho_water * self.material_data.g)
+        load_vector = np.zeros(geometry.n_dof, dtype=float)
+        for nid in ln:
+            x, y = float(coords[nid, 0]), float(coords[nid, 1])
+            h = max(0.0, float(depth) - y)
+            F = rho_g * h  # point force magnitude (debug/simple)
+            r = float(np.hypot(x, y))
+            if r > 1e-12:
+                nx, ny = -x / r, -y / r
+            else:
+                nx, ny = 0.0, -1.0
+            load_vector[2 * nid] = F * nx
+            load_vector[2 * nid + 1] = F * ny
+
+        from .truss_system_initializer import LoadData
+        base_pressure = rho_g * float(depth)
+        return LoadData(load_vector=load_vector, base_pressure=base_pressure, depth=depth)
+
+    def _compute_simple_load_vector(self, node_coords, outer_nodes, depth):
+        coords = np.asarray(node_coords, dtype=float)
+        ln = list(outer_nodes)
+        load_vector = np.zeros(coords.shape[0] * 2, dtype=float)
+        if not ln:
+            return load_vector
+        rho_g = float(self.material_data.rho_water * self.material_data.g)
+        for nid in ln:
+            x, y = float(coords[nid, 0]), float(coords[nid, 1])
+            h = max(0.0, float(depth) - y)
+            F = rho_g * h
+            r = float(np.hypot(x, y))
+            if r > 1e-12:
+                nx, ny = -x / r, -y / r
+            else:
+                nx, ny = 0.0, -1.0
+            load_vector[2 * nid] = F * nx
+            load_vector[2 * nid + 1] = F * ny
+        return load_vector
+
+    def _empty_load_data(self, depth):
+        from .truss_system_initializer import LoadData
+        return LoadData(load_vector=np.zeros(0, dtype=float), base_pressure=float(self.material_data.rho_water * self.material_data.g * depth), depth=depth)
     
     def get_shell_info(self):
         """获取壳体信息（用于调试）"""

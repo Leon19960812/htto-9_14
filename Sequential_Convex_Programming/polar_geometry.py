@@ -142,46 +142,71 @@ class PolarGeometry:
         # 创建半圆形环形区域用于几何包含检查
         ring_polygon = self._create_ring_polygon()
         
-        for i, j in itertools.combinations(range(len(self.nodes)), 2):
-            node1 = self.nodes[i]
-            node2 = self.nodes[j]
-            
-            # 精确复制trussopt的逻辑
-            dx = abs(node1.x - node2.x)
-            dy = abs(node1.y - node2.y)
-            
-            # 极坐标系统的GCD条件（适应浮点坐标）
-            # 使用放大后的整数化来处理浮点精度问题
-            scale = 10  # 适中的放大因子
-            dx_scaled = int(round(dx * scale))
-            dy_scaled = int(round(dy * scale))
-            
-            # 避免零距离
-            if dx_scaled == 0 and dy_scaled == 0:
-                continue
-                
-            # 放宽的GCD条件：允许gcd <= 2（适应极坐标几何特性）
-            if dx_scaled > 0 or dy_scaled > 0:
-                gcd_val = gcd(dx_scaled, dy_scaled)
-                if gcd_val > 2:
-                    continue
-            
-            # 创建连接线段
-            seg = LineString([node1.coords, node2.coords])
-            
-            # 几何包含检查
-            if ring_polygon.contains(seg) or ring_polygon.boundary.contains(seg):
-                self.connections.append((i, j))
-        
-        # 添加径向边界连接：inner[0]-outer[0] 和 inner[-1]-outer[-1]
-        outer_nodes = [(i, node) for i, node in enumerate(self.nodes) if node.node_type == 'outer']
-        inner_nodes = [(i, node) for i, node in enumerate(self.nodes) if node.node_type == 'inner']
-        
-        if len(outer_nodes) > 0 and len(inner_nodes) > 0:
-            # inner[0] 到 outer[0] 
-            self.connections.append((inner_nodes[0][0], outer_nodes[0][0]))
-            # inner[-1] 到 outer[-1]
-            self.connections.append((inner_nodes[-1][0], outer_nodes[-1][0]))
+        # 数值容差（相对于几何尺度）
+        radius_max = max((n.radius for n in self.nodes), default=1.0)
+        _EPS_COVER = 1e-7 * radius_max  # 极小缓冲，吸收贴边误差
+
+        # 角序窗口 + 径向家族 去冗余（无层标签）
+        n_total = len(self.nodes)
+        order = list(range(n_total))
+        order.sort(key=lambda idx: self.nodes[idx].theta)
+        thetas = np.array([self.nodes[idx].theta for idx in order], dtype=float)
+        # 估计平均角步长（跳过数值重复）
+        diffs = np.diff(thetas)
+        valid_diffs = diffs[diffs > 1e-12]
+        avg_step = float(np.median(valid_diffs)) if valid_diffs.size else (np.pi / max(n_total - 1, 1))
+        K_THETA_STEPS = 2
+        ANG_TOL = 1e-12
+        EPS_RADIAL = 0.5 * avg_step  # 判定“近似径向”的角容差
+
+        # 候选集合：基于角差阈值 Δθ ≤ K*avg_step（与环数无关）
+        conn_set = set()
+        max_dtheta = K_THETA_STEPS * avg_step + ANG_TOL
+        for a in range(n_total):
+            ia = order[a]
+            th_a = thetas[a]
+            for b in range(a + 1, n_total):
+                dth = thetas[b] - th_a
+                if dth > max_dtheta:
+                    break
+                ib = order[b]
+                # 域内性检查（covers + 极小 buffer）
+                seg = LineString([self.nodes[ia].coords, self.nodes[ib].coords])
+                if ring_polygon.buffer(_EPS_COVER).covers(seg):
+                    i0, i1 = (ia, ib) if ia < ib else (ib, ia)
+                    conn_set.add((i0, i1))
+
+        # 径向家族：在近似同角度的桶中，仅保留按半径相邻的连接，去掉跨越中间半径的“长径向”
+        # 1) 分桶（按角度近似相等）
+        buckets = []
+        start = 0
+        for k in range(1, n_total + 1):
+            if k == n_total or abs(thetas[k] - thetas[start]) > EPS_RADIAL:
+                bucket_ids = order[start:k]
+                if len(bucket_ids) >= 2:
+                    buckets.append(bucket_ids)
+                start = k
+        # 2) 对每个桶，半径排序，仅保留相邻半径的边
+        for ids in buckets:
+            ids_sorted = sorted(ids, key=lambda nid: self.nodes[nid].radius)
+            allowed = set()
+            for t in range(len(ids_sorted) - 1):
+                i, j = ids_sorted[t], ids_sorted[t + 1]
+                i0, i1 = (i, j) if i < j else (j, i)
+                allowed.add((i0, i1))
+            # 删除该径向家族中“非相邻半径”的连接
+            remove_list = []
+            for i in range(len(ids_sorted)):
+                for j in range(i + 1, len(ids_sorted)):
+                    a, b = ids_sorted[i], ids_sorted[j]
+                    p = (a, b) if a < b else (b, a)
+                    if p in conn_set and p not in allowed:
+                        remove_list.append(p)
+            for p in remove_list:
+                conn_set.discard(p)
+
+        # 写入 connections 列表
+        self.connections = list(conn_set)
     
     
     def _create_ring_polygon(self):
@@ -394,6 +419,67 @@ class PolarGeometry:
                 support_dofs.extend([2*i, 2*i+1])
         
         return np.array(support_dofs)
+
+    # --------------------------
+    # Synchronization helpers
+    # --------------------------
+    def rebuild_from_geometry(self, geometry) -> None:
+        """Synchronize PolarGeometry from an external GeometryData.
+
+        - Nodes: rebuilt from geometry.nodes (x,y) -> (r,θ)
+        - Node types: prefer geometry.inner_nodes/outer_nodes (fallback by radius)
+        - is_fixed: derived from geometry.fixed_dofs
+        - Connections: from geometry.elements
+        - Elements: recomputed lengths
+        """
+        import numpy as _np
+        nodes_xy = _np.asarray(getattr(geometry, 'nodes', []), dtype=float)
+        n_nodes = int(getattr(geometry, 'n_nodes', nodes_xy.shape[0]))
+        if nodes_xy.shape[0] != n_nodes:
+            n_nodes = nodes_xy.shape[0]
+        inner = set(getattr(geometry, 'inner_nodes', []) or [])
+        outer = set(getattr(geometry, 'outer_nodes', []) or [])
+        fixed_dofs = getattr(geometry, 'fixed_dofs', []) or []
+        fixed_nodes = set(int(d//2) for d in fixed_dofs)
+
+        # Fallback classification by radius if sets missing
+        if not inner or not outer:
+            if n_nodes > 0:
+                r_all = _np.hypot(nodes_xy[:, 0], nodes_xy[:, 1])
+                rmin, rmax = float(_np.min(r_all)), float(_np.max(r_all))
+                tol = 0.01
+                inner = set(int(i) for i,r in enumerate(r_all) if r <= (1.0+tol)*rmin)
+                outer = set(int(i) for i,r in enumerate(r_all) if r >= (1.0-tol)*rmax)
+
+        new_nodes = []
+        for nid in range(n_nodes):
+            x, y = nodes_xy[nid]
+            r = float(_np.hypot(x, y))
+            th = float(_np.arctan2(y, x))
+            if nid in inner:
+                ntype = 'inner'
+            elif nid in outer:
+                ntype = 'outer'
+            else:
+                ntype = 'middle'
+            new_nodes.append(PolarNode(id=nid, radius=r, theta=th, node_type=ntype, is_fixed=(nid in fixed_nodes)))
+        self.nodes = new_nodes
+
+        # connections from geometry.elements
+        self.connections = []
+        elements_list = getattr(geometry, 'elements', []) or []
+        for pair in elements_list:
+            i, j = int(pair[0]), int(pair[1])
+            self.connections.append((i, j))
+
+        # elements with lengths
+        elements = []
+        for (i, j) in self.connections:
+            xi, yi = nodes_xy[i]
+            xj, yj = nodes_xy[j]
+            L = float(_np.hypot(xi - xj, yi - yj))
+            elements.append([i, j, L, False])
+        self.elements = _np.array(elements) if elements else _np.empty((0, 4))
 
 
 def create_default_polar_config() -> PolarConfig:

@@ -34,7 +34,8 @@ class SequentialConvexTrussOptimizer:
                  depth=50, volume_fraction=0.1,
                  enable_middle_layer=False, middle_layer_ratio=0.85,
                  enable_aasi: bool = False,
-                 polar_rings: 'Optional[list]' = None):
+                 polar_rings: 'Optional[list]' = None,
+                 simple_loads: bool = False):
         """初始化优化器"""
         print("初始化SCP...")
         
@@ -56,7 +57,8 @@ class SequentialConvexTrussOptimizer:
             volume_fraction=volume_fraction,
             enable_middle_layer=enable_middle_layer,
             middle_layer_ratio=middle_layer_ratio,
-            polar_config=polar_config if polar_config is not None else {}
+            polar_config=polar_config if polar_config is not None else {},
+            simple_loads=bool(simple_loads),
         )
         
         # 2. 从初始化器获取所有必要属性
@@ -75,6 +77,86 @@ class SequentialConvexTrussOptimizer:
         
         # 严格模式：出现异常不做兜底回退，直接抛错终止
         self.strict_mode = True
+        # 节点融合开关（默认禁用；逐步打通后可启用）
+        self.enable_node_merge = False
+
+    # -------------------------------------------------------------
+    # Utility: run a single SDP subproblem for diagnostics/benchmark
+    # -------------------------------------------------------------
+    def run_single_subproblem(self, save_path: str = None) -> dict:
+        """Solve one linearized SDP subproblem at the current baseline.
+
+        - Initializes (theta_k, A_k)
+        - Sets current_compliance at baseline
+        - Calls SubproblemSolver once to get (A_new, theta_new, predicted_t)
+        - Evaluates actual compliance at the solution
+
+        Returns a dict with inputs/outputs. If save_path is provided, dumps JSON.
+        """
+        # Initialize variables
+        theta_k, A_k = self._initialize_optimization_variables()
+        # Baseline compliance
+        C_k = float(self.system_calculator.compute_actual_compliance(theta_k, A_k))
+        self.current_compliance = C_k
+        # Update per-node move caps for fair constraints
+        try:
+            self._update_theta_move_caps(len(theta_k))
+        except Exception:
+            pass
+        # Build optional AASI lower bounds only if phase C is active
+        if getattr(self, 'enable_aasi', False) and getattr(self, 'phase', 'A') == 'C':
+            try:
+                self.A_req_buckling = self._build_aasi_buckling_lower_bounds(theta_k, A_k)
+            except Exception:
+                self.A_req_buckling = None
+        else:
+            self.A_req_buckling = None
+
+        # Solve single subproblem
+        result = self.subproblem_solver.solve_linearized_subproblem(A_k, theta_k)
+        predicted_t = None
+        if isinstance(result, tuple) and len(result) == 4:
+            A_new, theta_new, C_new, predicted_t = result
+        else:
+            A_new, theta_new, C_new = result
+        # Package outputs
+        # Stats for visualization/removal threshold
+        A_min = float(getattr(self, 'A_min', 0.0))
+        A_max = float(getattr(self, 'A_max', 1.0))
+        A_thr = float(getattr(self, 'removal_threshold', 0.0))
+        active_mask = A_new > A_thr
+        out = {
+            'theta_k': np.asarray(theta_k, dtype=float).tolist(),
+            'A_k': np.asarray(A_k, dtype=float).tolist(),
+            'C_k': float(C_k),
+            'theta_new': np.asarray(theta_new, dtype=float).tolist(),
+            'A_new': np.asarray(A_new, dtype=float).tolist(),
+            'C_new': float(C_new),
+            't_pred': (None if predicted_t is None else float(predicted_t)),
+            'trust_radius': float(self.trust_region_manager.current_radius),
+            'boundary_buffer': float(self.geometry_params.boundary_buffer),
+            'min_angle_spacing': float(self.geometry_params.min_angle_spacing),
+            'A_min': A_min,
+            'A_max': A_max,
+            'removal_threshold': A_thr,
+            'n_active': int(np.sum(active_mask)),
+            'n_total': int(A_new.size),
+            'min_area': float(np.min(A_new)) if A_new.size else None,
+            'p1_area': float(np.percentile(A_new, 1)) if A_new.size else None,
+            'p5_area': float(np.percentile(A_new, 5)) if A_new.size else None,
+            'median_area': float(np.median(A_new)) if A_new.size else None,
+        }
+        if save_path:
+            try:
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            except Exception:
+                pass
+            tmp = save_path + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(out, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, save_path)
+            print(f"Single subproblem result saved: {save_path}")
+        return out
     
     def _setup_optimization_params(self):
         """设置优化参数"""
@@ -566,33 +648,34 @@ class SequentialConvexTrussOptimizer:
                                 # 禁用 AASI 时不进入 C，相当于仅进行 A/B 阶段的对照实验
                                 print("[Phase Switch] AASI 已禁用，跳过进入 C 阶段")
 
-                    # 节点融合检查
-                    merge_groups = self.initializer.group_nodes_by_radius(theta_k)
-                    if (self.phase in ('B', 'C')) and merge_groups:
-                        merge_info = self.initializer.merge_node_groups(theta_k, A_k, merge_groups)
+                    # 节点融合检查（可禁用）
+                    if getattr(self, 'enable_node_merge', False):
+                        merge_groups = self.initializer.group_nodes_by_radius(theta_k)
+                        if (self.phase in ('B', 'C')) and merge_groups:
+                            merge_info = self.initializer.merge_node_groups(theta_k, A_k, merge_groups)
                         
-                        if merge_info['structure_modified']:
-                            # 更新当前状态
-                            theta_k = merge_info['theta_updated']
-                            A_k = merge_info['A_updated']
-                            self.current_angles = theta_k
-                            self.current_areas = A_k
-                            
-                            # 更新几何结构
-                            self.initializer.geometry = merge_info['geometry_updated']
-                            self.geometry = merge_info['geometry_updated']
-                            self.elements = self.geometry.elements  # 更新elements引用
-                            # 同步兼容性（legacy）属性，避免可视化和其他模块索引不一致
-                            # 这些属性在初始化时从 geometry 派生，此处必须在几何更新后刷新
-                            self.nodes = self.geometry.nodes
-                            # outer_nodes is deprecated; keep load_nodes only
-                            self.load_nodes = self.geometry.load_nodes
-                            self.inner_nodes = self.geometry.inner_nodes
-                            # 如果存在中间层，刷新中间层节点
-                            if hasattr(self.geometry, 'middle_nodes'):
-                                self.middle_nodes = self.geometry.middle_nodes
-                            
-                            # 重建 θ 映射（按新的 load_nodes 顺序截取）
+                            if merge_info['structure_modified']:
+                                # 更新当前状态
+                                theta_k = merge_info['theta_updated']
+                                A_k = merge_info['A_updated']
+                                self.current_angles = theta_k
+                                self.current_areas = A_k
+                                
+                                # 更新几何结构
+                                self.initializer.geometry = merge_info['geometry_updated']
+                                self.geometry = merge_info['geometry_updated']
+                                self.elements = self.geometry.elements  # 更新elements引用
+                                # 同步兼容性（legacy）属性，避免可视化和其他模块索引不一致
+                                # 这些属性在初始化时从 geometry 派生，此处必须在几何更新后刷新
+                                self.nodes = self.geometry.nodes
+                                # outer_nodes is deprecated; keep load_nodes only
+                                self.load_nodes = self.geometry.load_nodes
+                                self.inner_nodes = self.geometry.inner_nodes
+                                # 如果存在中间层，刷新中间层节点
+                                if hasattr(self.geometry, 'middle_nodes'):
+                                    self.middle_nodes = self.geometry.middle_nodes
+                                
+                                # 重建 θ 映射（按新的 load_nodes 顺序截取）
                             try:
                                 self.theta_node_ids = list(self.geometry.load_nodes[: len(theta_k)])
                             except Exception:
@@ -620,6 +703,12 @@ class SequentialConvexTrussOptimizer:
                             self.unit_stiffness_matrices = self.stiffness_calc.precompute_unit_stiffness_matrices(
                                 self.geometry, self.element_lengths
                             )
+                            # 同步到 PolarGeometry 作为唯一真源
+                            try:
+                                if hasattr(self, 'polar_geometry') and self.polar_geometry is not None:
+                                    self.polar_geometry.rebuild_from_geometry(self.geometry)
+                            except Exception as _e:
+                                print(f"   ⚠️ 同步 PolarGeometry 失败: {_e}")
                             # 重新计算逐点步长帽
                             try:
                                 self._update_theta_move_caps(len(theta_k))
@@ -916,10 +1005,12 @@ class SequentialConvexTrussOptimizer:
                 'n_radial': 4,  # 使用固定的2个径向网格
                 'E_shell': self.material_data.E_steel * 1000
             }
+            simple_mode = bool(getattr(self, 'use_simple_loads', False))
             self.load_calc = LoadCalculatorWithShell(
                 material_data=self.material_data,
-                enable_shell=True,
-                shell_params=shell_params
+                enable_shell=(not simple_mode),
+                shell_params=shell_params,
+                simple_mode=simple_mode,
             )
             print("   重新初始化载荷计算器（Shell FEA网格已更新）")
         except Exception as e:
