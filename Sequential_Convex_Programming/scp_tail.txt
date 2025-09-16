@@ -1,0 +1,60 @@
+        print(f"  变化情况:")
+        print(f"    θ变化: {theta_change:.6e} (最大变化: {np.max(np.abs(theta_new - theta_k)):.6e})")
+        print(f"    A变化: {A_change:.6e} (最大变化: {np.max(np.abs(A_new - A_k)):.6e})")
+    
+    def _print_optimization_summary(self, success_count: int):
+        """打印优化总结"""
+        print(f"\n{'='*80}")
+        print("优化完成")
+        print(f"{'='*80}")
+        print(f"总迭代次数: {self.iteration_count + 1}")
+        print(f"成功步长: {success_count}")
+        print(f"最终柔度: {self.current_compliance:.6e}")
+        print(f"最终信赖域半径: {self.trust_radius:.6f}")
+        
+        # 保存最终结果
+        self.initializer.final_angles = self.current_angles
+        self.initializer.final_areas = self.current_areas
+        self.initializer.final_compliance = self.current_compliance
+
+        # 自动导出步长详细信息（只导出可序列化的关键字段）
+        try:
+            export_dir = os.path.join("results")
+            os.makedirs(export_dir, exist_ok=True)
+            # 先构造精简且可序列化的步骤列表
+            raw_steps = getattr(self, 'step_details', [])
+            def to_serializable(x):
+                try:
+                    if x is None:
+                        return None
+                    import numpy as _np
+                    if isinstance(x, (_np.floating, _np.integer)):
+                        return float(x)
+                    if isinstance(x, _np.ndarray):
+                        return x.tolist()
+                    if isinstance(x, (list, tuple)):
+                        return [to_serializable(v) for v in x]
+                    if isinstance(x, (float, int, str, bool, dict)):
+                        return x
+                    return str(x)
+                except Exception:
+                    return None
+
+            kept_fields = [
+                'iteration','rho','pred_source','trust_radius',
+                'current_compliance','actual_compliance','predicted_compliance',
+                'actual_reduction','predicted_reduction',
+                'half_step_compliance','deltaC_A','deltaC_theta',
+                'cond_K_half','cond_K_full',
+                'active_set_removed','active_set_added','angle_projection_flags',
+                'top_element_contribs','top_angle_contribs','alpha'
+            ]
+            safe_steps = []
+            for step in raw_steps:
+                row = {}
+                for k in kept_fields:
+                    row[k] = to_serializable(step.get(k, None))
+                safe_steps.append(row)
+
+            # JSON 完整导出（精简后的）
+            json_path = os.path.join(export_dir, "step_details.json")
