@@ -183,39 +183,39 @@ class ConstraintCalculator:
         )
 
     def setup_boundary_conditions(self, geometry: GeometryData) -> Tuple[List[int], List[int]]:
-        # Fixed supports at arc endpoints for available rings:
-        # - Always inner ring endpoints if available
-        # - Additionally middle ring endpoints if available
-        # Fallback order remains: outer -> load_nodes -> [0, n-1]
-        fixed_nodes: List[int] = []
-        try:
-            coords = np.asarray(geometry.nodes, dtype=float)
-            def _endpoints(node_ids: List[int]) -> List[int]:
-                if not node_ids or len(node_ids) < 2:
-                    return []
-                arr = np.asarray(node_ids, dtype=int)
-                ang = np.arctan2(coords[arr, 1], coords[arr, 0])
-                i_min = int(arr[int(np.argmin(ang))])
-                i_max = int(arr[int(np.argmax(ang))])
-                return [i_min, i_max] if i_min != i_max else [i_min]
+        # Prefer explicit support list prepared during initialization
+        explicit = getattr(geometry, 'support_nodes', None)
+        if explicit:
+            fixed_nodes = list(dict.fromkeys(int(n) for n in explicit))
+        else:
+            # Backward-compatible fallback: derive from ring endpoints
+            fixed_nodes: List[int] = []
+            try:
+                coords = np.asarray(geometry.nodes, dtype=float)
 
-            inner = getattr(geometry, 'inner_nodes', []) or []
-            middle = getattr(geometry, 'middle_nodes', []) or []
-            outer = getattr(geometry, 'outer_nodes', []) or []
+                def _endpoints(node_ids: List[int]) -> List[int]:
+                    if not node_ids or len(node_ids) < 2:
+                        return []
+                    arr = np.asarray(node_ids, dtype=int)
+                    ang = np.arctan2(coords[arr, 1], coords[arr, 0])
+                    i_min = int(arr[int(np.argmin(ang))])
+                    i_max = int(arr[int(np.argmax(ang))])
+                    return [i_min, i_max] if i_min != i_max else [i_min]
 
-            # Collect endpoints from inner and middle rings if present
-            fixed_nodes.extend(_endpoints(inner))
-            fixed_nodes.extend(_endpoints(middle))
+                inner = getattr(geometry, 'inner_nodes', []) or []
+                middle = getattr(geometry, 'middle_nodes', []) or []
+                outer = getattr(geometry, 'outer_nodes', []) or []
 
-            # If nothing collected, fallback to outer/load_nodes
-            if not fixed_nodes:
-                cand = outer or (getattr(geometry, 'load_nodes', []) or [])
-                fixed_nodes.extend(_endpoints(cand))
-        except Exception:
-            fixed_nodes = []
-        # Final fallback: first and last index in nodes list
-        if not fixed_nodes and getattr(geometry, 'n_nodes', 0) >= 2:
-            fixed_nodes = [0, geometry.n_nodes - 1]
+                fixed_nodes.extend(_endpoints(inner))
+                fixed_nodes.extend(_endpoints(middle))
+
+                if not fixed_nodes:
+                    cand = outer or (getattr(geometry, 'load_nodes', []) or [])
+                    fixed_nodes.extend(_endpoints(cand))
+            except Exception:
+                fixed_nodes = []
+            if not fixed_nodes and getattr(geometry, 'n_nodes', 0) >= 2:
+                fixed_nodes = [0, geometry.n_nodes - 1]
 
         fixed_dofs: List[int] = []
         for nid in fixed_nodes:
@@ -306,6 +306,40 @@ class TrussSystemInitializer:
         else:
             load_nodes = list(outer_nodes)
 
+        # Determine support nodes: all ring endpoints except the ring carrying loads
+        coords_arr = np.asarray(nodes_xy, dtype=float)
+        ring_groups = {
+            "outer": outer_nodes,
+            "middle": middle_nodes,
+            "inner": inner_nodes,
+        }
+
+        load_set = set(load_nodes)
+
+        def _endpoints(ids: List[int]) -> List[int]:
+            if not ids or len(ids) < 2:
+                return []
+            arr = np.asarray(ids, dtype=int)
+            ang = np.arctan2(coords_arr[arr, 1], coords_arr[arr, 0])
+            imin = int(arr[int(np.argmin(ang))])
+            imax = int(arr[int(np.argmax(ang))])
+            return [imin, imax] if imin != imax else [imin]
+
+        support_nodes: List[int] = []
+        for ring_name, ids in ring_groups.items():
+            if not ids:
+                continue
+            ring_set = set(ids)
+            overlap = len(ring_set & load_set)
+            ratio = float(overlap) / float(len(ring_set)) if ring_set else 0.0
+            if ratio > 0.5:  # treat this ring as the load ring
+                continue
+            support_nodes.extend(_endpoints(ids))
+
+        # Remove potential duplicates and ensure supports are not load nodes
+        support_nodes = [nid for nid in dict.fromkeys(sorted(support_nodes)) if nid not in load_set]
+        pg.set_support_nodes(support_nodes)
+
         n_nodes = len(nodes_xy)
         self.geometry = GeometryData(
             nodes=nodes_xy,
@@ -318,6 +352,8 @@ class TrussSystemInitializer:
             n_elements=len(elements),
             n_dof=2 * n_nodes,
         )
+        # Persist support node list for downstream consumers
+        self.geometry.support_nodes = list(support_nodes)
 
         # Derived/assembled data
         self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
@@ -339,6 +375,7 @@ class TrussSystemInitializer:
         self.load_nodes = getattr(self.geometry, "load_nodes", self.geometry.outer_nodes)
         self.inner_nodes = self.geometry.inner_nodes
         self.middle_nodes = self.geometry.middle_nodes
+        self.support_nodes = getattr(self.geometry, 'support_nodes', [])
         self.n_nodes = self.geometry.n_nodes
         self.n_elements = self.geometry.n_elements
         self.n_dof = self.geometry.n_dof
@@ -385,6 +422,8 @@ class TrussSystemInitializer:
         try:
             sup_nodes = sorted(set(int(d // 2) for d in self.fixed_dofs))
             print(f"  Support nodes: {sup_nodes}")
+            if getattr(self, 'support_nodes', None):
+                print(f"  Declared supports: {self.support_nodes}")
         except Exception:
             pass
         print(f"  Fixed DOFs: {len(self.fixed_dofs)}  Free DOFs: {len(self.free_dofs)}")

@@ -211,11 +211,17 @@ class StepQualityEvaluator:
         else:
             predicted = float(predicted_from_model)
 
-        num = current - actual
-        den = current - predicted
-        if abs(den) < 1e-16:
-            return 1.0 if num >= 0.0 else -1.0
-        return float(num / den)
+        actual_reduction = current - actual
+        predicted_reduction = current - predicted
+
+        # Guard: if模型预测本身就是“变差”（或无法给出下降），直接判定为劣质步长
+        # 返回 -inf 让信赖域机制拒绝该步
+        if predicted_reduction <= 0.0 or not np.isfinite(predicted_reduction):
+            return float('-inf')
+
+        if abs(predicted_reduction) < 1e-16:
+            return 1.0 if actual_reduction >= 0.0 else -1.0
+        return float(actual_reduction / predicted_reduction)
 
 
 # ==========================
@@ -346,6 +352,16 @@ class SubproblemSolver:
         for i in range(m):
             Kff_k += float(A_k[i]) * Ki_ff[i]
 
+        # Debug diagnostics at baseline
+        try:
+            Kff_k_sym = 0.5 * (Kff_k + Kff_k.T)
+            evals = np.linalg.eigvalsh(Kff_k_sym)
+            lam_min = float(np.min(evals)) if evals.size else float('nan')
+            lam_max = float(np.max(evals)) if evals.size else float('nan')
+            print(f"[SCP-SDP] n_free={n_free}, m={m}, lambda_min(K_aff@k)={lam_min:.3e}, lambda_max={lam_max:.3e}")
+        except Exception:
+            pass
+
         # f at theta_k on free DOFs
         f_full_k = self.opt._compute_load_vector(coords_k)
         fff_k = f_full_k[free] * f_scale
@@ -384,6 +400,44 @@ class SubproblemSolver:
                 f_full_j = self.opt._compute_load_vector(coords_j)
                 ftheta_ff.append(((f_full_j[free] * f_scale) - fff_k) / fd_h)
 
+                # Restore baseline geometry before next perturbation to avoid drift
+                if j < n - 1:
+                    self.opt._update_node_coordinates(theta_k)
+
+            # Ensure geometry is reset to baseline after all perturbations
+            self.opt._update_node_coordinates(theta_k)
+
+        # Further diagnostics: J_f/J_o split and gamma estimate
+        try:
+            node_ids = getattr(self.opt, 'theta_node_ids', []) or []
+            load_set = set(getattr(self.opt.geometry, 'load_nodes', []) or [])
+            J_f = list(range(n))
+            J_o = []
+            if len(node_ids) == n and load_set:
+                J_f = [j for j in range(n) if int(node_ids[j]) in load_set]
+                J_o = [j for j in range(n) if int(node_ids[j]) not in load_set]
+            caps = getattr(self.opt, 'theta_move_caps', None)
+            gamma_est = 0.0
+            Lsum_o = 0.0
+            for j in J_o:
+                Sj = 0.5 * (Ktheta_ff[j] + Ktheta_ff[j].T)
+                Lj = float(np.linalg.norm(Sj, 'fro'))
+                capj = float(caps[j]) if (caps is not None and len(caps) == n) else float(self.opt.geometry_params.neighbor_move_cap)
+                Lsum_o += Lj
+                gamma_est += capj * Lj
+            # Also compute all-theta bound (J_f + J_o)
+            gamma_all = 0.0
+            Lsum_all = 0.0
+            for j in range(n):
+                Sj = 0.5 * (Ktheta_ff[j] + Ktheta_ff[j].T)
+                Lj = float(np.linalg.norm(Sj, 'fro'))
+                capj = float(caps[j]) if (caps is not None and len(caps) == n) else float(self.opt.geometry_params.neighbor_move_cap)
+                Lsum_all += Lj
+                gamma_all += capj * Lj
+            print(f"[SCP-SDP] J_f={len(J_f)}, J_o={len(J_o)}, sum||Sym(Kθ_j)||_F(J_o)={Lsum_o:.3e}, gamma_est(J_o)={gamma_est:.3e}, sum||Sym(Kθ_j)||_F(all)={Lsum_all:.3e}, gamma_est(all)={gamma_all:.3e}, TR={r_tr:.3e}")
+        except Exception:
+            pass
+
         # Decision variables
         theta = cp.Variable(n) if n > 0 else None
         A = cp.Variable(m) if m > 0 else None
@@ -391,12 +445,58 @@ class SubproblemSolver:
 
         constraints = []
 
+        # Geometry constraint diagnostics (initial slack at baseline order)
+        try:
+            if n > 1:
+                gp_loc = gp
+                node_ids = getattr(self.opt, 'theta_node_ids', []) or []
+                if len(node_ids) == n:
+                    coords_theta = np.asarray(coords_k, dtype=float)[np.asarray(node_ids, dtype=int)]
+                    radii = np.hypot(coords_theta[:, 0], coords_theta[:, 1])
+                    Rmax = float(np.max(radii)) if radii.size else 1.0
+                    r_tol = max(1e-12, 1e-6 * Rmax)
+                    dtheta = np.diff(theta_k)
+                    same_mask = np.abs(np.diff(radii)) <= r_tol
+                    cross_mask = ~same_mask
+                    min_same_slack = None
+                    min_cross_slack = None
+                    if np.any(same_mask):
+                        min_same_slack = float(np.min(dtheta[same_mask] - float(gp_loc.min_angle_spacing)))
+                    if np.any(cross_mask):
+                        min_cross_slack = float(np.min(dtheta[cross_mask]))
+                    slack_lb = float(theta_k[0] - float(gp_loc.boundary_buffer))
+                    slack_ub = float((np.pi - float(gp_loc.boundary_buffer)) - theta_k[-1])
+                    print(f"[SCP-GEO] n_vars={n}, same_pairs={int(np.sum(same_mask))}, cross_pairs={int(np.sum(cross_mask))}, "
+                          f"min_same_slack={min_same_slack}, min_cross_slack={min_cross_slack}, "
+                          f"buffer_slack=({slack_lb:.3e},{slack_ub:.3e})")
+        except Exception:
+            pass
+
         # Theta constraints
         if n > 0:
             constraints.append(theta[0] >= float(gp.boundary_buffer))
             constraints.append(theta[-1] <= float(np.pi - gp.boundary_buffer))
-            for i in range(1, n):
-                constraints.append(theta[i] >= theta[i - 1] + float(gp.min_angle_spacing))
+            # 全局角序单调：对“近似同环”（半径接近）的相邻对施加最小角间距；
+            # 跨环相邻对仅要求非递减（不加 spacing），避免多环同角导致的不可行。
+            try:
+                node_ids = getattr(self.opt, 'theta_node_ids', []) or []
+                if len(node_ids) == n:
+                    # 使用基线坐标估计半径
+                    coords_theta = np.asarray(coords_k, dtype=float)[np.asarray(node_ids, dtype=int)]
+                    radii = np.hypot(coords_theta[:, 0], coords_theta[:, 1])
+                    Rmax = float(np.max(radii)) if radii.size else 1.0
+                    r_tol = max(1e-12, 1e-6 * Rmax)
+                    for i in range(1, n):
+                        if abs(float(radii[i] - radii[i - 1])) <= r_tol:
+                            constraints.append(theta[i] >= theta[i - 1] + float(gp.min_angle_spacing))
+                        else:
+                            constraints.append(theta[i] >= theta[i - 1])
+                else:
+                    for i in range(1, n):
+                        constraints.append(theta[i] >= theta[i - 1] + float(gp.min_angle_spacing))
+            except Exception:
+                for i in range(1, n):
+                    constraints.append(theta[i] >= theta[i - 1] + float(gp.min_angle_spacing))
             constraints.append(cp.norm2(theta - theta_k) <= r_tr)
             caps = getattr(self.opt, "theta_move_caps", None)
             if caps is not None and len(caps) == n:
@@ -426,16 +526,17 @@ class SubproblemSolver:
             objective = cp.Minimize(sum(obj_terms) if obj_terms else 0)
             prob = cp.Problem(objective, constraints)
         else:
+            # Base affine stiffness (A-part only)
             K_aff = 0
             if m > 0:
-                # sum A_i Ki
                 K_aff = sum(A[i] * Ki_ff[i] for i in range(m))
             else:
                 K_aff = np.zeros((n_free, n_free))
-            K_lin = K_aff
-            if n > 0 and Ktheta_ff:
-                for j in range(n):
-                    K_lin = K_lin + (theta[j] - float(theta_k[j])) * Ktheta_ff[j]
+
+            # Full θ linearization: include all θ directions in the stiffness expansion
+            K_lin_keep = K_aff
+            for j in range(n):
+                K_lin_keep = K_lin_keep + (theta[j] - float(theta_k[j])) * Ktheta_ff[j]
 
             # f_lin_ff(theta)
             f_lin = fff_k.copy()
@@ -443,10 +544,8 @@ class SubproblemSolver:
                 for j in range(n):
                     f_lin = f_lin + (theta[j] - float(theta_k[j])) * ftheta_ff[j]
 
-            # LMI via Schur complement
-            # [K_lin, f_lin; f_lin^T, t] >= 0
-            # Symmetrize K_lin for PSD robustness
-            M11 = 0.5 * (K_lin + K_lin.T)
+            # LMI via Schur complement: [K_lin, f_lin; f_lin^T, t] ⪰ 0
+            M11 = 0.5 * (K_lin_keep + K_lin_keep.T)
             M12 = cp.reshape(f_lin, (n_free, 1))
             M21 = cp.reshape(f_lin, (1, n_free))
             M22 = cp.reshape(t, (1, 1))

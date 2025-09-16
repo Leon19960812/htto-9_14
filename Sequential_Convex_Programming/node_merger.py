@@ -36,6 +36,9 @@ class NodeMerger:
         """Prefer inner ring endpoints by angle; fallback to outer/load nodes."""
         import numpy as _np
         try:
+            explicit = getattr(self.geometry, 'support_nodes', None)
+            if explicit:
+                return list(dict.fromkeys(int(n) for n in explicit))
             coords = _np.asarray(getattr(self.geometry, 'nodes', []), dtype=float)
             inner = getattr(self.geometry, 'inner_nodes', []) or []
             outer = getattr(self.geometry, 'outer_nodes', []) or []
@@ -213,6 +216,16 @@ class NodeMerger:
         fixed_dofs, free_dofs = self.constraint_calc.setup_boundary_conditions(geometry)
         geometry.fixed_dofs = fixed_dofs
         geometry.free_dofs = free_dofs
+
+        # 4.1) propagate explicit support list if available
+        if hasattr(self.geometry, 'support_nodes'):
+            new_support = []
+            for nid in getattr(self.geometry, 'support_nodes', []):
+                if nid in old_to_new:
+                    mapped = old_to_new[nid]
+                    if mapped not in new_support:
+                        new_support.append(mapped)
+            geometry.support_nodes = new_support
 
         # 5) remap theta (1D) for optimized nodes list
         if hasattr(self.geometry, 'load_nodes') and self.geometry.load_nodes:

@@ -23,6 +23,9 @@ class TrussVisualization:
         """
         import numpy as _np
         try:
+            explicit = getattr(getattr(optimizer, 'geometry', optimizer), 'support_nodes', None)
+            if explicit:
+                return list(dict.fromkeys(int(n) for n in explicit))
             coords = _np.asarray(getattr(optimizer, 'nodes', None), dtype=float)
             n_nodes = coords.shape[0] if coords is not None else int(getattr(optimizer, 'n_nodes', 0))
             def endpoints(ids):

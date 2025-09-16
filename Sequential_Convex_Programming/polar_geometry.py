@@ -111,9 +111,8 @@ class PolarGeometry:
             angles = np.linspace(0, np.pi, n_nodes)
             
             for i, theta in enumerate(angles):
-                # 支撑节点通常在两端
-                is_fixed = (node_id in self.config.support_nodes or 
-                           (node_type == 'outer' and (i == 0 or i == n_nodes-1)))
+                # 支撑节点集合由外部显式指定，默认均为可移动节点
+                is_fixed = (node_id in self.config.support_nodes)
                 
                 node = PolarNode(
                     id=node_id,
@@ -155,7 +154,7 @@ class PolarGeometry:
         diffs = np.diff(thetas)
         valid_diffs = diffs[diffs > 1e-12]
         avg_step = float(np.median(valid_diffs)) if valid_diffs.size else (np.pi / max(n_total - 1, 1))
-        K_THETA_STEPS = 2
+        K_THETA_STEPS = 3
         ANG_TOL = 1e-12
         EPS_RADIAL = 0.5 * avg_step  # 判定“近似径向”的角容差
 
@@ -264,6 +263,17 @@ class PolarGeometry:
             elements.append([node1_id, node2_id, length, False])
         
         self.elements = np.array(elements) if elements else np.empty((0, 4))
+
+    def set_support_nodes(self, support_ids: List[int]) -> None:
+        """Mark provided node ids as fixed supports and clear others.
+
+        This keeps `config.support_nodes` in sync and updates the runtime
+        PolarNode instances so downstream optimizers see the correct fixed set.
+        """
+        support_set = set(int(i) for i in support_ids)
+        self.config.support_nodes = list(sorted(support_set))
+        for node in self.nodes:
+            node.is_fixed = node.id in support_set
     
     def get_optimization_variables(self) -> np.ndarray:
         """获取优化变量数组（theta值）
@@ -464,6 +474,12 @@ class PolarGeometry:
                 ntype = 'middle'
             new_nodes.append(PolarNode(id=nid, radius=r, theta=th, node_type=ntype, is_fixed=(nid in fixed_nodes)))
         self.nodes = new_nodes
+
+        # Update support metadata to stay consistent with geometry snapshot
+        support_nodes = getattr(geometry, 'support_nodes', None)
+        if support_nodes is None:
+            support_nodes = sorted(fixed_nodes)
+        self.set_support_nodes(list(support_nodes))
 
         # connections from geometry.elements
         self.connections = []

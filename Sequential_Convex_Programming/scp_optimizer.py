@@ -251,26 +251,49 @@ class SequentialConvexTrussOptimizer:
     
     def _initialize_optimization_variables(self) -> Tuple[np.ndarray, np.ndarray]:
         """初始化优化变量"""
-        # Initialize theta on explicit load_nodes (legacy outer_nodes removed)
-        theta_k = self.initialization_manager.initialize_node_angles(self.geometry.load_nodes)
+        # 正确的变量集合：除支撑节点（geometry.fixed_dofs 映射的节点）以外的所有节点；
+        # 全局按角度升序排序，统一施加 boundary/min_spacing/信赖域约束。
+        coords_all = np.asarray(self.geometry.nodes, dtype=float)
+        n_all = coords_all.shape[0]
+        fixed_nodes = set(int(d // 2) for d in (self.fixed_dofs or []))
+        theta_all = np.arctan2(coords_all[:, 1], coords_all[:, 0])
+        var_ids = [int(i) for i in range(n_all) if i not in fixed_nodes]
+        if not var_ids:
+            raise RuntimeError("No free nodes available for theta optimization (all nodes are fixed).")
+        # 按角度升序排序
+        var_ids_sorted = sorted(var_ids, key=lambda nid: float(theta_all[nid]))
+        theta_k = theta_all[var_ids_sorted].astype(float)
+        theta_ids = var_ids_sorted
+
         A_k = self.initialization_manager.initialize_areas(
             self.geometry.n_elements,
             self.element_lengths,
             self.volume_constraint
         )
         # 记录初始角度用于相邻移动上限
+        # 对初始 θ 做一次轻量投影：端点留出极小缓冲余量，链上保持非递减，避免首步因等号卡死
+        try:
+            gp_loc = self.geometry_params
+            eps_buf = 1e-4
+            if theta_k.size >= 1:
+                theta_k[0] = max(float(theta_k[0]), float(gp_loc.boundary_buffer) + eps_buf)
+                theta_k[-1] = min(float(theta_k[-1]), float(np.pi - gp_loc.boundary_buffer) - eps_buf)
+                # 轻量非递减（避免严格等号导致的数值卡顿），不强加 spacing，spacing 由约束控制
+                tiny = 1e-8
+                for i in range(1, theta_k.size):
+                    if theta_k[i] < theta_k[i-1]:
+                        theta_k[i] = float(theta_k[i-1] + tiny)
+        except Exception:
+            pass
         self.initial_angles = theta_k.copy()
         # 记录 θ 映射（按当前优化变量的节点顺序）
-        try:
-            self.theta_node_ids = list(self.geometry.load_nodes[: len(theta_k)])
-        except Exception:
-            self.theta_node_ids = list(range(len(theta_k)))
+        self.theta_node_ids = theta_ids
         return theta_k, A_k
 
     def _compute_member_forces_and_lengths(self, theta: np.ndarray, A: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """计算每根构件的轴力 N_i 与长度 L_i（约定受压为正）。"""
         # 1) 更新坐标与几何
-        node_coords = self.geometry_calc.update_node_coordinates(self.geometry, theta, self.radius)
+        node_coords = self._update_node_coordinates(theta)
         lengths, directions = self.geometry_calc.compute_element_geometry(node_coords, self.geometry.elements)
 
         # 2) 组装刚度并求解位移
@@ -1051,7 +1074,7 @@ class SequentialConvexTrussOptimizer:
         print("-" * 40)
         try:
             # 1. 用theta重算节点坐标
-            node_coords = self.geometry_calc.update_node_coordinates(self.geometry, theta, self.radius)
+            node_coords = self._update_node_coordinates(theta)
             # 2. 重算单元几何
             element_lengths, element_directions = self.geometry_calc.compute_element_geometry(node_coords, self.geometry.elements)
             # 3. 重算全局刚度矩阵
