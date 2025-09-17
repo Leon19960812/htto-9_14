@@ -154,7 +154,7 @@ class PolarGeometry:
         diffs = np.diff(thetas)
         valid_diffs = diffs[diffs > 1e-12]
         avg_step = float(np.median(valid_diffs)) if valid_diffs.size else (np.pi / max(n_total - 1, 1))
-        K_THETA_STEPS = 3
+        K_THETA_STEPS = 2
         ANG_TOL = 1e-12
         EPS_RADIAL = 0.5 * avg_step  # 判定“近似径向”的角容差
 

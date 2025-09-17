@@ -654,6 +654,63 @@ Verification:
                     ha='center', va='center', transform=ax.transAxes)
             ax.set_title('Area Distribution')
     
+    def plot_compliance_evolution(self, optimizer, save_path=None, figsize=(8, 5), dpi=300, show_plot=False):
+        """绘制接受步的柔度演化曲线。"""
+        series = list(getattr(optimizer, 'compliance_history', []) or [])
+        comp_values = [float(c) for c in series if c is not None and np.isfinite(c)]
+
+        if not comp_values:
+            # 尝试从 step_details 中恢复已接受的柔度记录
+            step_details = list(getattr(optimizer, 'step_details', []) or [])
+            for step in step_details:
+                val = step.get('accepted_compliance')
+                if val is not None and np.isfinite(val):
+                    comp_values.append(float(val))
+        if not comp_values:
+            print('✗ 无柔度历史数据可用于绘制。')
+            return None
+
+        iterations = np.arange(len(comp_values))
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.plot(iterations, comp_values, marker='o', color='navy', linewidth=2, markersize=4, label='Accepted compliance')
+
+        # 估计整体改进百分比并在图中标注
+        if len(comp_values) > 1:
+            initial = comp_values[0]
+            final = comp_values[-1]
+            if np.isfinite(initial) and initial > 0:
+                delta_pct = (initial - final) / initial * 100.0
+                ax.text(0.02, 0.02, f"Δ {delta_pct:.1f}%", transform=ax.transAxes,
+                        fontsize=11, fontweight='bold', color='darkgreen',
+                        bbox=dict(boxstyle='round,pad=0.35', facecolor='white', alpha=0.8, edgecolor='darkgreen'))
+
+        # 如果柔度跨越幅度较大，则采用对数纵轴以突出后期变化
+        if len(comp_values) > 1:
+            min_val = float(np.min(comp_values))
+            max_val = float(np.max(comp_values))
+            if min_val > 0 and max_val / min_val > 50.0:
+                ax.set_yscale('log')
+
+        ax.set_xlabel('Accepted iteration', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Compliance', fontsize=12, fontweight='bold')
+        ax.set_title('Compliance Evolution', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.legend(loc='best')
+        ax.set_xlim(iterations[0], iterations[-1] if len(iterations) > 1 else iterations[0] + 1)
+
+        plt.tight_layout()
+
+        if save_path:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
+            print(f"✓ 柔度演化图已保存至: {save_path}")
+
+        if show_plot:
+            plt.show(block=True)
+        else:
+            plt.close(fig)
+        return fig, ax
+
     def plot_ground_structure_only(self, geometry_params, save_path=None):
         """只生成ground structure，不需要优化结果"""
         

@@ -23,3 +23,6 @@
   - Recommended editor settings: `files.encoding=utf8`, `files.eol=\n`.
   - Optional pre-commit hook to reject non-UTF-8 files.
 
+- Version control
+  - Commit and push after every change so we can roll back quickly.
+

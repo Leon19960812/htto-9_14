@@ -7,11 +7,11 @@ LoadCalculator initialized:
   生成inner环: 13个节点，半径=3.00
   生成地面结构连接（trussopt策略）...
   节点数: 39
-  连接数: 302
+  连接数: 222
 Structure: R=5.0 m, Sectors=12, Inner ratio=0.6
 Depth: 50.0 m, Pressure: 502.8 kPa
 Volume fraction: 0.200
-Nodes: 39, Elements: 302, DOF: 78
+Nodes: 39, Elements: 222, DOF: 78
 Load nodes: 13
   Support nodes: [13, 25, 26, 38]
   Declared supports: [13, 25, 26, 38]
@@ -22,18 +22,19 @@ Load nodes: 13
 GEOMETRY-TOPOLOGY JOINT OPTIMIZATION
 ================================================================================
 初始化优化...
+对称约束已启用：16 组镜像节点，3 个节点固定在 pi/2。
 初始设置:
   节点数: 35
-  单元数: 302
-  初始柔度: 4.949065e+03
+  单元数: 222
+  初始柔度: 7.734798e+03
   信赖域半径: 0.0175
 
 ============================================================
-迭代 1/15
+迭代 1/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.032e-04, lambda_max=1.821e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=7.509e-01, gamma_est(J_o)=2.621e-02, sum||Sym(Kθ_j)||_F(all)=1.159e+00, gamma_est(all)=4.044e-02, TR=1.745e-02
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=6.283e-05, lambda_max=1.517e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=7.449e-01, gamma_est(J_o)=6.202e-02, sum||Sym(Kθ_j)||_F(all)=1.153e+00, gamma_est(all)=9.762e-02, TR=1.745e-02
 [SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.2267928027592628, min_cross_slack=0.0, buffer_slack=(1.000e-04,1.000e-04)
 D:\Software\AnnaConda\Conda\envs\scp\Lib\site-packages\cvxpy\atoms\affine\reshape.py:68: FutureWarning: 
     You didn't specify the order of the reshape expression. The default order
@@ -43,307 +44,750 @@ D:\Software\AnnaConda\Conda\envs\scp\Lib\site-packages\cvxpy\atoms\affine\reshap
     
   warnings.warn(reshape_order_warning, FutureWarning)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.530e+04
-  Step norms: ||Δθ||2=1.745e-02, ||ΔA||2=6.212e-02
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.454e+03
+  Step norms: ||Δθ||2=1.745e-02, ||ΔA||2=5.052e-02
   变化情况:
-    θ变化: 1.745325e-02 (最大变化: 9.255872e-03)
-    A变化: 6.212049e-02 (最大变化: 8.000000e-03)
-  Quality backtracking: α=1.000, ρ=1.000
+    θ变化: 1.745327e-02 (最大变化: 4.515223e-03)
+    A变化: 5.052047e-02 (最大变化: 7.999999e-03)
+  Quality backtracking: α=1.000, ρ=1.001
 Trust region: 0.0175 -> 0.0262 (EXPAND)
 ✅ 接受步长 (第1次成功)
-   柔度: 4.949065e+03 → 2.186434e+03
-   改进: 55.82%
+   柔度: 7.734798e+03 → 3.548951e+03
+   改进: 54.12%
 
 ============================================================
-迭代 2/15
+迭代 2/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=2.598e-06, lambda_max=3.974e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.875e-01, gamma_est(J_o)=3.098e-02, sum||Sym(Kθ_j)||_F(all)=2.058e+00, gamma_est(all)=7.184e-02, TR=2.618e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.2226347645213417, min_cross_slack=6.634407423433686e-08, buffer_slack=(7.007e-04,7.955e-04)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.641e-05, lambda_max=4.028e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=9.202e-01, gamma_est(J_o)=7.612e-02, sum||Sym(Kθ_j)||_F(all)=1.954e+00, gamma_est(all)=1.663e-01, TR=2.618e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.22582469026330396, min_cross_slack=8.881784197001252e-16, buffer_slack=(1.284e-06,1.299e-06)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.775e+04
-  Step norms: ||Δθ||2=2.618e-02, ||ΔA||2=1.838e-02
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.468e+03
+  Step norms: ||Δθ||2=2.618e-02, ||ΔA||2=1.162e-02
   变化情况:
-    θ变化: 2.617991e-02 (最大变化: 1.144828e-02)
-    A变化: 1.837880e-02 (最大变化: 5.449482e-03)
-  Quality backtracking: α=1.000, ρ=0.999
-Trust region: 0.0262 -> 0.0349 (EXPAND)
+    θ变化: 2.617991e-02 (最大变化: 6.079113e-03)
+    A变化: 1.162362e-02 (最大变化: 4.220443e-03)
+  Quality backtracking: α=1.000, ρ=1.003
+Trust region: 0.0262 -> 0.0393 (EXPAND)
 ✅ 接受步长 (第2次成功)
-   柔度: 2.186434e+03 → 2.165312e+03
+   柔度: 3.548951e+03 → 3.525470e+03
+   改进: 0.66%
+
+============================================================
+迭代 3/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.633e-05, lambda_max=4.032e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.045e+00, gamma_est(J_o)=8.706e-02, sum||Sym(Kθ_j)||_F(all)=2.188e+00, gamma_est(all)=1.867e-01, TR=3.927e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.2201479966973703, min_cross_slack=-4.440892098500626e-16, buffer_slack=(1.089e-07,1.217e-07)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.872e+03
+  Step norms: ||Δθ||2=3.927e-02, ||ΔA||2=1.350e-02
+  变化情况:
+    θ变化: 3.926988e-02 (最大变化: 9.082557e-03)
+    A变化: 1.350289e-02 (最大变化: 4.474397e-03)
+  Quality backtracking: α=1.000, ρ=1.013
+Trust region: 0.0393 -> 0.0589 (EXPAND)
+✅ 接受步长 (第3次成功)
+   柔度: 3.525470e+03 → 3.491231e+03
    改进: 0.97%
 
 ============================================================
-迭代 3/15
+迭代 4/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=2.221e-06, lambda_max=3.942e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.383e-01, gamma_est(J_o)=2.926e-02, sum||Sym(Kθ_j)||_F(all)=2.005e+00, gamma_est(all)=6.999e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.21039092831000153, min_cross_slack=4.267941866586966e-08, buffer_slack=(2.539e-03,2.590e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.413e-05, lambda_max=4.058e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.014e+00, gamma_est(J_o)=8.435e-02, sum||Sym(Kθ_j)||_F(all)=2.128e+00, gamma_est(all)=1.816e-01, TR=5.890e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.21167719165941437, min_cross_slack=0.0, buffer_slack=(1.655e-07,1.840e-07)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.919e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=3.922e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈3.189e+03
+  Step norms: ||Δθ||2=5.890e-02, ||ΔA||2=1.111e-02
   变化情况:
-    θ变化: 3.490654e-02 (最大变化: 1.544065e-02)
-    A变化: 3.921641e-03 (最大变化: 1.857573e-03)
-  Quality backtracking: α=1.000, ρ=1.014
-Trust region: 0.0349 -> 0.0349 (EXPAND)
-✅ 接受步长 (第3次成功)
-   柔度: 2.165312e+03 → 2.141945e+03
-   改进: 1.08%
-
-============================================================
-迭代 4/15
-============================================================
-求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=2.039e-06, lambda_max=3.912e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.438e-01, gamma_est(J_o)=2.946e-02, sum||Sym(Kθ_j)||_F(all)=1.999e+00, gamma_est(all)=6.978e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.19522947357208034, min_cross_slack=6.339778213515501e-08, buffer_slack=(3.747e-03,3.953e-03)
-✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.923e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=3.508e-03
-  变化情况:
-    θ变化: 3.490654e-02 (最大变化: 1.531263e-02)
-    A变化: 3.508185e-03 (最大变化: 1.493315e-03)
-  Quality backtracking: α=1.000, ρ=1.018
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 5.890482e-02 (最大变化: 1.353541e-02)
+    A变化: 1.111134e-02 (最大变化: 4.308974e-03)
+  Quality backtracking: α=1.000, ρ=1.021
+Trust region: 0.0589 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第4次成功)
-   柔度: 2.141945e+03 → 2.118992e+03
-   改进: 1.07%
+   柔度: 3.491231e+03 → 3.439946e+03
+   改进: 1.47%
 
 ============================================================
-迭代 5/15
+迭代 5/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=2.028e-06, lambda_max=3.901e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.399e-01, gamma_est(J_o)=2.932e-02, sum||Sym(Kθ_j)||_F(all)=1.981e+00, gamma_est(all)=6.915e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.18068487868658611, min_cross_slack=7.215106778701852e-08, buffer_slack=(4.280e-03,4.399e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.286e-05, lambda_max=4.100e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.027e+00, gamma_est(J_o)=8.554e-02, sum||Sym(Kθ_j)||_F(all)=2.124e+00, gamma_est(all)=1.813e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.1988660869073364, min_cross_slack=-2.220446049250313e-16, buffer_slack=(2.289e-07,2.513e-07)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.939e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=4.232e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈3.491e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.786e-03
   变化情况:
-    θ变化: 3.490653e-02 (最大变化: 1.522563e-02)
-    A变化: 4.231693e-03 (最大变化: 2.332112e-03)
-  Quality backtracking: α=1.000, ρ=1.015
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726613e-02 (最大变化: 1.965563e-02)
+    A变化: 6.786418e-03 (最大变化: 2.588299e-03)
+  Quality backtracking: α=1.000, ρ=1.030
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第5次成功)
-   柔度: 2.118992e+03 → 2.096326e+03
-   改进: 1.07%
+   柔度: 3.439946e+03 → 3.364056e+03
+   改进: 2.21%
 
 ============================================================
-迭代 6/15
+迭代 6/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=2.011e-06, lambda_max=3.900e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.431e-01, gamma_est(J_o)=2.943e-02, sum||Sym(Kθ_j)||_F(all)=1.977e+00, gamma_est(all)=6.900e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.16653161455008522, min_cross_slack=7.182739203415167e-08, buffer_slack=(4.492e-03,4.351e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.192e-05, lambda_max=4.160e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.081e+00, gamma_est(J_o)=9.037e-02, sum||Sym(Kθ_j)||_F(all)=2.205e+00, gamma_est(all)=1.885e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.17920895238130613, min_cross_slack=-7.993605777301127e-15, buffer_slack=(1.733e-06,1.909e-06)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.964e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=3.094e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈3.755e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.521e-03
   变化情况:
-    θ变化: 3.490653e-02 (最大变化: 1.512001e-02)
-    A变化: 3.093756e-03 (最大变化: 1.427705e-03)
-  Quality backtracking: α=1.000, ρ=1.015
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726643e-02 (最大变化: 2.051860e-02)
+    A变化: 6.521405e-03 (最大变化: 2.104010e-03)
+  Quality backtracking: α=1.000, ρ=1.048
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第6次成功)
-   柔度: 2.096326e+03 → 2.073856e+03
-   改进: 1.07%
+   柔度: 3.364056e+03 → 3.286902e+03
+   改进: 2.29%
 
 ============================================================
-迭代 7/15
+迭代 7/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.989e-06, lambda_max=3.906e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.458e-01, gamma_est(J_o)=2.952e-02, sum||Sym(Kθ_j)||_F(all)=1.979e+00, gamma_est(all)=6.907e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.15248287552878476, min_cross_slack=6.385847317602611e-08, buffer_slack=(4.658e-03,3.984e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.131e-05, lambda_max=4.246e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.157e+00, gamma_est(J_o)=9.697e-02, sum||Sym(Kθ_j)||_F(all)=2.309e+00, gamma_est(all)=1.976e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.15869213102024984, min_cross_slack=-4.440892098500626e-16, buffer_slack=(1.272e-07,1.443e-07)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.998e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=3.388e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈3.812e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=4.006e-03
   变化情况:
-    θ变化: 3.490655e-02 (最大变化: 1.501057e-02)
-    A变化: 3.387532e-03 (最大变化: 1.185742e-03)
-  Quality backtracking: α=1.000, ρ=1.013
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726645e-02 (最大变化: 2.154429e-02)
+    A变化: 4.006322e-03 (最大变化: 1.202189e-03)
+  Quality backtracking: α=1.000, ρ=1.055
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第7次成功)
-   柔度: 2.073856e+03 → 2.051617e+03
-   改进: 1.07%
+   柔度: 3.286902e+03 → 3.209754e+03
+   改进: 2.35%
 
 ============================================================
-迭代 8/15
+迭代 8/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.961e-06, lambda_max=3.918e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.373e-01, gamma_est(J_o)=2.923e-02, sum||Sym(Kθ_j)||_F(all)=1.967e+00, gamma_est(all)=6.866e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.13846831158499975, min_cross_slack=5.021204829702697e-08, buffer_slack=(4.902e-03,3.447e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.138e-05, lambda_max=4.336e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.140e+00, gamma_est(J_o)=9.537e-02, sum||Sym(Kθ_j)||_F(all)=2.266e+00, gamma_est(all)=1.936e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.13714794470470767, min_cross_slack=-2.220446049250313e-16, buffer_slack=(3.876e-08,4.634e-08)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.023e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=3.459e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈3.949e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=3.632e-03
   变化情况:
-    θ变化: 3.490654e-02 (最大变化: 1.492314e-02)
-    A变化: 3.458686e-03 (最大变化: 1.292065e-03)
-  Quality backtracking: α=1.000, ρ=1.013
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726646e-02 (最大变化: 2.252744e-02)
+    A变化: 3.631696e-03 (最大变化: 1.377743e-03)
+  Quality backtracking: α=1.000, ρ=1.063
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第8次成功)
-   柔度: 2.051617e+03 → 2.029580e+03
-   改进: 1.07%
+   柔度: 3.209754e+03 → 3.132367e+03
+   改进: 2.41%
 
 ============================================================
-迭代 9/15
+迭代 9/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.944e-06, lambda_max=3.934e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.303e-01, gamma_est(J_o)=2.898e-02, sum||Sym(Kθ_j)||_F(all)=1.955e+00, gamma_est(all)=6.825e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.12458289610132478, min_cross_slack=6.080076486725261e-08, buffer_slack=(5.125e-03,2.864e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.139e-05, lambda_max=4.497e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.157e+00, gamma_est(J_o)=9.645e-02, sum||Sym(Kθ_j)||_F(all)=2.263e+00, gamma_est(all)=1.930e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.11462055288856807, min_cross_slack=0.0, buffer_slack=(1.504e-09,1.912e-09)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.073e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=4.766e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈4.173e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=3.846e-03
   变化情况:
-    θ变化: 3.490656e-02 (最大变化: 1.481806e-02)
-    A变化: 4.765905e-03 (最大变化: 1.731959e-03)
-  Quality backtracking: α=1.000, ρ=1.013
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726646e-02 (最大变化: 2.326668e-02)
+    A变化: 3.845601e-03 (最大变化: 1.528824e-03)
+  Quality backtracking: α=1.000, ρ=1.069
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第9次成功)
-   柔度: 2.029580e+03 → 2.007774e+03
-   改进: 1.07%
+   柔度: 3.132367e+03 → 3.055073e+03
+   改进: 2.47%
 
 ============================================================
-迭代 10/15
+迭代 10/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.907e-06, lambda_max=3.953e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.170e-01, gamma_est(J_o)=2.852e-02, sum||Sym(Kθ_j)||_F(all)=1.936e+00, gamma_est(all)=6.758e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.11090538283774454, min_cross_slack=2.9526887601605267e-08, buffer_slack=(5.209e-03,2.333e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.143e-05, lambda_max=4.769e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.231e+00, gamma_est(J_o)=1.021e-01, sum||Sym(Kθ_j)||_F(all)=2.328e+00, gamma_est(all)=1.978e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.09135387059830034, min_cross_slack=0.0, buffer_slack=(1.210e-09,1.662e-09)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.182e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=3.422e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈4.368e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=7.207e-03
   变化情况:
-    θ变化: 3.490654e-02 (最大变化: 1.471773e-02)
-    A变化: 3.422165e-03 (最大变化: 1.118659e-03)
-  Quality backtracking: α=1.000, ρ=1.012
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726646e-02 (最大变化: 2.365337e-02)
+    A变化: 7.207497e-03 (最大变化: 2.483669e-03)
+  Quality backtracking: α=1.000, ρ=1.105
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第10次成功)
-   柔度: 2.007774e+03 → 1.986210e+03
-   改进: 1.07%
+   柔度: 3.055073e+03 → 2.975882e+03
+   改进: 2.59%
 
 ============================================================
-迭代 11/15
+迭代 11/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.822e-06, lambda_max=3.974e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.210e-01, gamma_est(J_o)=2.866e-02, sum||Sym(Kθ_j)||_F(all)=1.933e+00, gamma_est(all)=6.748e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.09737587113936803, min_cross_slack=5.8878399489259436e-08, buffer_slack=(5.120e-03,1.858e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.198e-05, lambda_max=5.234e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.379e+00, gamma_est(J_o)=1.131e-01, sum||Sym(Kθ_j)||_F(all)=2.440e+00, gamma_est(all)=2.058e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.067700498833827, min_cross_slack=0.0, buffer_slack=(2.992e-09,4.384e-09)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.249e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=4.481e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈4.900e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=5.230e-03
   变化情况:
-    θ变化: 3.490657e-02 (最大变化: 1.469292e-02)
-    A变化: 4.480719e-03 (最大变化: 1.556389e-03)
-  Quality backtracking: α=1.000, ρ=1.012
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726643e-02 (最大变化: 2.367314e-02)
+    A变化: 5.229944e-03 (最大变化: 1.725458e-03)
+  Quality backtracking: α=1.000, ρ=1.082
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第11次成功)
-   柔度: 1.986210e+03 → 1.964915e+03
-   改进: 1.07%
+   柔度: 2.975882e+03 → 2.898690e+03
+   改进: 2.59%
 
 ============================================================
-迭代 12/15
+迭代 12/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.778e-06, lambda_max=3.999e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.240e-01, gamma_est(J_o)=2.876e-02, sum||Sym(Kθ_j)||_F(all)=1.936e+00, gamma_est(all)=6.758e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.0840249710719939, min_cross_slack=2.5100476808148642e-08, buffer_slack=(4.977e-03,1.397e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.239e-05, lambda_max=6.072e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.777e+00, gamma_est(J_o)=1.440e-01, sum||Sym(Kθ_j)||_F(all)=2.823e+00, gamma_est(all)=2.353e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.04402732775524133, min_cross_slack=0.0, buffer_slack=(3.877e-08,5.789e-08)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.272e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=5.855e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈5.975e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=2.929e-03
   变化情况:
-    θ变化: 3.490654e-02 (最大变化: 1.465823e-02)
-    A变化: 5.854698e-03 (最大变化: 3.230683e-03)
-  Quality backtracking: α=1.000, ρ=1.010
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726640e-02 (最大变化: 2.267220e-02)
+    A变化: 2.929159e-03 (最大变化: 9.835231e-04)
+  Quality backtracking: α=1.000, ρ=1.107
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第12次成功)
-   柔度: 1.964915e+03 → 1.943892e+03
-   改进: 1.07%
+   柔度: 2.898690e+03 → 2.820896e+03
+   改进: 2.68%
 
 ============================================================
-迭代 13/15
+迭代 13/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.775e-06, lambda_max=4.033e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.299e-01, gamma_est(J_o)=2.897e-02, sum||Sym(Kθ_j)||_F(all)=1.918e+00, gamma_est(all)=6.695e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.07089272453224787, min_cross_slack=4.600727665504678e-08, buffer_slack=(4.812e-03,1.089e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.282e-05, lambda_max=7.660e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=2.813e+00, gamma_est(J_o)=2.250e-01, sum||Sym(Kθ_j)||_F(all)=3.909e+00, gamma_est(all)=3.207e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.02135510942293468, min_cross_slack=0.0, buffer_slack=(5.888e-08,8.843e-08)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.312e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=4.323e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈8.142e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=3.379e-03
   变化情况:
-    θ变化: 3.490655e-02 (最大变化: 1.472497e-02)
-    A变化: 4.322702e-03 (最大变化: 1.799865e-03)
-  Quality backtracking: α=1.000, ρ=1.010
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726641e-02 (最大变化: 2.099709e-02)
+    A变化: 3.378624e-03 (最大变化: 1.083128e-03)
+  Quality backtracking: α=1.000, ρ=1.151
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第13次成功)
-   柔度: 1.943892e+03 → 1.923130e+03
-   改进: 1.07%
+   柔度: 2.820896e+03 → 2.747211e+03
+   改进: 2.61%
 
 ============================================================
-迭代 14/15
+迭代 14/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.763e-06, lambda_max=4.076e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.256e-01, gamma_est(J_o)=2.882e-02, sum||Sym(Kθ_j)||_F(all)=1.900e+00, gamma_est(all)=6.631e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.05817903145945409, min_cross_slack=4.3011316286367673e-08, buffer_slack=(4.699e-03,9.526e-04)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.365e-05, lambda_max=1.111e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.095e+00, gamma_est(J_o)=4.821e-01, sum||Sym(Kθ_j)||_F(all)=8.256e+00, gamma_est(all)=6.707e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.0003580259607507026, min_cross_slack=-2.220446049250313e-16, buffer_slack=(5.299e-08,8.100e-08)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.351e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=8.213e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈8.513e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=7.001e-03
   变化情况:
-    θ变化: 3.490655e-02 (最大变化: 1.498204e-02)
-    A变化: 8.212947e-03 (最大变化: 3.274015e-03)
-  Quality backtracking: α=1.000, ρ=1.014
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726646e-02 (最大变化: 2.155610e-02)
+    A变化: 7.001476e-03 (最大变化: 2.453950e-03)
+  Quality backtracking: α=1.000, ρ=1.047
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第14次成功)
-   柔度: 1.923130e+03 → 1.902494e+03
-   改进: 1.07%
+   柔度: 2.747211e+03 → 2.699298e+03
+   改进: 1.74%
 
 ============================================================
-迭代 15/15
+迭代 15/80
 ============================================================
 求解联合线性化子问题...
-[SCP-SDP] n_free=70, m=302, lambda_min(K_aff@k)=1.750e-06, lambda_max=4.114e-02
-[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=8.232e-01, gamma_est(J_o)=2.873e-02, sum||Sym(Kθ_j)||_F(all)=1.898e+00, gamma_est(all)=6.625e-02, TR=3.491e-02
-[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.04605272634884133, min_cross_slack=4.1565671349275135e-08, buffer_slack=(4.353e-03,1.009e-03)
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.320e-05, lambda_max=1.124e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.188e+00, gamma_est(J_o)=4.891e-01, sum||Sym(Kθ_j)||_F(all)=8.968e+00, gamma_est(all)=7.317e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.214838555614218e-10, min_cross_slack=0.0, buffer_slack=(3.205e-10,8.338e-10)
 ✅ 梯度缓存成功
-  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.413e+04
-  Step norms: ||Δθ||2=3.491e-02, ||ΔA||2=9.673e-03
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈8.803e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.473e-03
   变化情况:
-    θ变化: 3.490658e-02 (最大变化: 1.521655e-02)
-    A变化: 9.672999e-03 (最大变化: 3.794800e-03)
-  Quality backtracking: α=1.000, ρ=1.015
-Trust region: 0.0349 -> 0.0349 (EXPAND)
+    θ变化: 8.726642e-02 (最大变化: 2.046696e-02)
+    A变化: 6.472597e-03 (最大变化: 2.402178e-03)
+  Quality backtracking: α=1.000, ρ=1.046
+Trust region: 0.0873 -> 0.0873 (EXPAND)
 ✅ 接受步长 (第15次成功)
-   柔度: 1.902494e+03 → 1.881989e+03
+   柔度: 2.699298e+03 → 2.652492e+03
+   改进: 1.73%
+
+============================================================
+迭代 16/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.285e-05, lambda_max=1.131e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.208e+00, gamma_est(J_o)=4.907e-01, sum||Sym(Kθ_j)||_F(all)=9.033e+00, gamma_est(all)=7.373e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.3518416889374274e-08, min_cross_slack=0.0, buffer_slack=(1.962e-08,5.371e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈9.025e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=2.950e-03
+  变化情况:
+    θ变化: 8.726646e-02 (最大变化: 2.006099e-02)
+    A变化: 2.950222e-03 (最大变化: 8.551715e-04)
+  Quality backtracking: α=1.000, ρ=1.039
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第16次成功)
+   柔度: 2.652492e+03 → 2.606726e+03
+   改进: 1.73%
+
+============================================================
+迭代 17/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.264e-05, lambda_max=1.141e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.222e+00, gamma_est(J_o)=4.919e-01, sum||Sym(Kθ_j)||_F(all)=9.063e+00, gamma_est(all)=7.398e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=5.16564700736577e-10, min_cross_slack=0.0, buffer_slack=(7.426e-10,2.178e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈9.293e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=3.804e-03
+  变化情况:
+    θ变化: 8.726642e-02 (最大变化: 2.060937e-02)
+    A变化: 3.804480e-03 (最大变化: 1.485126e-03)
+  Quality backtracking: α=1.000, ρ=1.037
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第17次成功)
+   柔度: 2.606726e+03 → 2.562267e+03
+   改进: 1.71%
+
+============================================================
+迭代 18/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.241e-05, lambda_max=1.153e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.213e+00, gamma_est(J_o)=4.909e-01, sum||Sym(Kθ_j)||_F(all)=9.041e+00, gamma_est(all)=7.377e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=7.044181547094519e-09, min_cross_slack=-2.220446049250313e-16, buffer_slack=(1.015e-08,3.182e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈9.602e+03
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=3.074e-03
+  变化情况:
+    θ变化: 8.726640e-02 (最大变化: 2.177343e-02)
+    A变化: 3.074058e-03 (最大变化: 1.115035e-03)
+  Quality backtracking: α=1.000, ρ=1.040
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第18次成功)
+   柔度: 2.562267e+03 → 2.518498e+03
+   改进: 1.71%
+
+============================================================
+迭代 19/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.215e-05, lambda_max=1.167e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.220e+00, gamma_est(J_o)=4.914e-01, sum||Sym(Kθ_j)||_F(all)=8.806e+00, gamma_est(all)=7.171e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.1409536065931647e-08, min_cross_slack=-2.220446049250313e-16, buffer_slack=(1.634e-08,5.137e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.000e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.840e-03
+  变化情况:
+    θ变化: 8.726646e-02 (最大变化: 2.138188e-02)
+    A变化: 6.840189e-03 (最大变化: 2.339470e-03)
+  Quality backtracking: α=1.000, ρ=1.080
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第19次成功)
+   柔度: 2.518498e+03 → 2.473525e+03
+   改进: 1.79%
+
+============================================================
+迭代 20/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.185e-05, lambda_max=1.185e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.206e+00, gamma_est(J_o)=4.899e-01, sum||Sym(Kθ_j)||_F(all)=8.861e+00, gamma_est(all)=7.216e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=8.838484805151481e-11, min_cross_slack=0.0, buffer_slack=(1.237e-10,4.213e-10)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.042e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=4.244e-03
+  变化情况:
+    θ变化: 8.726646e-02 (最大变化: 2.192086e-02)
+    A变化: 4.244311e-03 (最大变化: 1.418832e-03)
+  Quality backtracking: α=1.000, ρ=1.030
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第20次成功)
+   柔度: 2.473525e+03 → 2.429965e+03
+   改进: 1.76%
+
+============================================================
+迭代 21/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.161e-05, lambda_max=1.209e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.237e+00, gamma_est(J_o)=4.922e-01, sum||Sym(Kθ_j)||_F(all)=8.841e+00, gamma_est(all)=7.195e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=6.631167039083952e-10, min_cross_slack=0.0, buffer_slack=(9.518e-10,3.314e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.091e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=2.933e-03
+  变化情况:
+    θ变化: 8.726646e-02 (最大变化: 2.242120e-02)
+    A变化: 2.933288e-03 (最大变化: 9.211280e-04)
+  Quality backtracking: α=1.000, ρ=1.032
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第21次成功)
+   柔度: 2.429965e+03 → 2.386825e+03
+   改进: 1.78%
+
+============================================================
+迭代 22/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.138e-05, lambda_max=1.241e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.323e+00, gamma_est(J_o)=4.992e-01, sum||Sym(Kθ_j)||_F(all)=8.683e+00, gamma_est(all)=7.052e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=8.946385993136019e-11, min_cross_slack=0.0, buffer_slack=(1.296e-10,4.742e-10)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.133e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=2.918e-03
+  变化情况:
+    θ变化: 8.726646e-02 (最大变化: 2.269242e-02)
+    A变化: 2.917593e-03 (最大变化: 9.729316e-04)
+  Quality backtracking: α=1.000, ρ=1.029
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第22次成功)
+   柔度: 2.386825e+03 → 2.344583e+03
+   改进: 1.77%
+
+============================================================
+迭代 23/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.133e-05, lambda_max=1.284e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.440e+00, gamma_est(J_o)=5.087e-01, sum||Sym(Kθ_j)||_F(all)=8.531e+00, gamma_est(all)=6.912e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.5020562918466318e-10, min_cross_slack=0.0, buffer_slack=(2.190e-10,8.506e-10)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.199e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=4.005e-03
+  变化情况:
+    θ变化: 8.726645e-02 (最大变化: 2.271071e-02)
+    A变化: 4.005231e-03 (最大变化: 1.135798e-03)
+  Quality backtracking: α=1.000, ρ=1.019
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第23次成功)
+   柔度: 2.344583e+03 → 2.304196e+03
+   改进: 1.72%
+
+============================================================
+迭代 24/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.121e-05, lambda_max=1.344e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.624e+00, gamma_est(J_o)=5.234e-01, sum||Sym(Kθ_j)||_F(all)=8.373e+00, gamma_est(all)=6.760e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.4300032269431995e-09, min_cross_slack=0.0, buffer_slack=(2.127e-09,8.701e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.287e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=4.515e-03
+  变化情况:
+    θ变化: 8.726646e-02 (最大变化: 2.361645e-02)
+    A变化: 4.514688e-03 (最大变化: 1.293551e-03)
+  Quality backtracking: α=1.000, ρ=1.041
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第24次成功)
+   柔度: 2.304196e+03 → 2.265438e+03
+   改进: 1.68%
+
+============================================================
+迭代 25/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.108e-05, lambda_max=1.426e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=7.044e+00, gamma_est(J_o)=5.579e-01, sum||Sym(Kθ_j)||_F(all)=8.649e+00, gamma_est(all)=6.979e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=3.0760305760879625e-10, min_cross_slack=-2.220446049250313e-16, buffer_slack=(4.519e-10,1.978e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.423e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.407e-03
+  变化情况:
+    θ变化: 8.726642e-02 (最大变化: 2.506874e-02)
+    A变化: 6.406868e-03 (最大变化: 2.599802e-03)
+  Quality backtracking: α=1.000, ρ=1.105
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第25次成功)
+   柔度: 2.265438e+03 → 2.225826e+03
+   改进: 1.75%
+
+============================================================
+迭代 26/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.087e-05, lambda_max=1.546e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=7.842e+00, gamma_est(J_o)=6.233e-01, sum||Sym(Kθ_j)||_F(all)=1.069e+01, gamma_est(all)=8.715e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=4.255543563369546e-09, min_cross_slack=-6.661338147750939e-16, buffer_slack=(6.199e-09,3.123e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.543e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=3.207e-03
+  变化情况:
+    θ变化: 8.726643e-02 (最大变化: 2.376772e-02)
+    A变化: 3.206594e-03 (最大变化: 1.304982e-03)
+  Quality backtracking: α=1.000, ρ=1.048
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第26次成功)
+   柔度: 2.225826e+03 → 2.187856e+03
+   改进: 1.71%
+
+============================================================
+迭代 27/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.073e-05, lambda_max=1.655e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=9.205e+00, gamma_est(J_o)=7.339e-01, sum||Sym(Kθ_j)||_F(all)=1.203e+01, gamma_est(all)=9.809e-01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=4.0822294780640256e-09, min_cross_slack=0.0, buffer_slack=(6.202e-09,3.013e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈1.394e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=2.053e-02
+  变化情况:
+    θ变化: 8.726645e-02 (最大变化: 2.433988e-02)
+    A变化: 2.052824e-02 (最大变化: 5.191282e-03)
+  Quality backtracking: α=1.000, ρ=1.286
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第27次成功)
+   柔度: 2.187856e+03 → 2.140228e+03
+   改进: 2.18%
+
+============================================================
+迭代 28/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.250e-05, lambda_max=1.743e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.425e+01, gamma_est(J_o)=1.152e+00, sum||Sym(Kθ_j)||_F(all)=1.756e+01, gamma_est(all)=1.441e+00, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.4204013243368507e-09, min_cross_slack=0.0, buffer_slack=(1.941e-09,8.802e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=1.000 | tried: 1.000 | cond(K_ff)≈2.773e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=2.030e-02
+  变化情况:
+    θ变化: 8.726645e-02 (最大变化: 2.814009e-02)
+    A变化: 2.030352e-02 (最大变化: 5.784050e-03)
+  Quality backtracking: α=1.000, ρ=1.118
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第28次成功)
+   柔度: 2.140228e+03 → 2.081947e+03
+   改进: 2.72%
+
+============================================================
+迭代 29/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=9.085e-06, lambda_max=2.519e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=6.197e+01, gamma_est(J_o)=4.940e+00, sum||Sym(Kθ_j)||_F(all)=6.751e+01, gamma_est(all)=5.424e+00, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.542877394762222e-09, min_cross_slack=-9.547918011776346e-15, buffer_slack=(3.077e-09,1.124e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈3.145e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=1.685e-02
+  变化情况:
+    θ变化: 4.363322e-02 (最大变化: 1.465629e-02)
+    A变化: 8.427230e-03 (最大变化: 2.651887e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第29次成功)
+   柔度: 2.081947e+03 → 2.045220e+03
+   改进: 1.76%
+
+============================================================
+迭代 30/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.078e-05, lambda_max=3.389e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.875e+02, gamma_est(J_o)=1.501e+01, sum||Sym(Kθ_j)||_F(all)=1.989e+02, gamma_est(all)=1.600e+01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.3603219760637284e-09, min_cross_slack=-6.217248937900877e-15, buffer_slack=(3.155e-09,1.305e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈4.141e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=8.898e-03
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.572197e-02)
+    A变化: 4.448938e-03 (最大变化: 1.315340e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第30次成功)
+   柔度: 2.045220e+03 → 2.017142e+03
+   改进: 1.37%
+
+============================================================
+迭代 31/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.121e-05, lambda_max=4.643e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=5.434e+02, gamma_est(J_o)=4.350e+01, sum||Sym(Kθ_j)||_F(all)=5.842e+02, gamma_est(all)=4.706e+01, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.7288385896485625e-09, min_cross_slack=-9.547918011776346e-15, buffer_slack=(2.471e-09,1.108e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈5.609e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.746e-03
+  变化情况:
+    θ变化: 4.363322e-02 (最大变化: 1.591933e-02)
+    A变化: 3.373233e-03 (最大变化: 1.008180e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第31次成功)
+   柔度: 2.017142e+03 → 1.993263e+03
+   改进: 1.18%
+
+============================================================
+迭代 32/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.096e-05, lambda_max=6.150e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.503e+03, gamma_est(J_o)=1.204e+02, sum||Sym(Kθ_j)||_F(all)=1.623e+03, gamma_est(all)=1.309e+02, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.0081869847587974e-09, min_cross_slack=-2.0872192862952943e-14, buffer_slack=(3.141e-09,1.554e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈8.046e+04
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=4.518e-03
+  变化情况:
+    θ变化: 4.363322e-02 (最大变化: 1.596222e-02)
+    A变化: 2.258853e-03 (最大变化: 6.806706e-04)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第32次成功)
+   柔度: 1.993263e+03 → 1.971792e+03
    改进: 1.08%
 
-================================================================================
-优化完成
-================================================================================
-总迭代次数: 15
-成功步长: 15
-最终柔度: 1.881989e+03
-最终信赖域半径: 0.034907
-已导出: results\step_details.json
-已导出: results\step_details_summary.csv
-
-Optimization finished.
-Final compliance: 1.881989e+03
-Load nodes: 13; first id=0 at (4.999,0.107), last id=12 at (-4.999,0.093)
-Figure saved to: results_scp_simple\load_distribution.png
-D:\Code\Sequential_Convex_Programming\htto-9_8_version\Sequential_Convex_Programming\visualization.py:564: UserWarning: FigureCanvasAgg is non-interactive, and thus cannot be shown
-  plt.show()
-Figure saved to: results_scp_simple\area_histogram.png
+============================================================
+迭代 33/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.092e-05, lambda_max=8.788e-01
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=4.364e+03, gamma_est(J_o)=3.491e+02, sum||Sym(Kθ_j)||_F(all)=4.708e+03, gamma_est(all)=3.791e+02, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.3010264214862186e-09, min_cross_slack=-1.7319479184152442e-14, buffer_slack=(3.751e-09,1.958e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈1.151e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=5.069e-03
+  变化情况:
+    θ变化: 4.363322e-02 (最大变化: 1.596094e-02)
+    A变化: 2.534440e-03 (最大变化: 7.306840e-04)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第33次成功)
+   柔度: 1.971792e+03 → 1.952371e+03
+   改进: 0.98%
 
 ============================================================
-GENERATING TRUST REGION EVOLUTION PLOT
+迭代 34/80
 ============================================================
-发现 2 个信赖域变化事件
-  事件 1: Expansion at iteration 1, ρ=1.000, 0.0175 → 0.0262
-  事件 2: Expansion at iteration 2, ρ=0.999, 0.0262 → 0.0349
-✓ 信赖域演化图已保存至: results_scp_simple\trust_region_evolution.png
-✓ 信赖域演化图生成完成！
-Figures saved to: results_scp_simple
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.099e-05, lambda_max=1.265e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.259e+04, gamma_est(J_o)=1.006e+03, sum||Sym(Kθ_j)||_F(all)=1.357e+04, gamma_est(all)=1.091e+03, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.1419007158185455e-09, min_cross_slack=-1.0880185641326534e-14, buffer_slack=(3.605e-09,1.956e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈1.641e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=6.100e-03
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.592793e-02)
+    A变化: 3.050250e-03 (最大变化: 8.344436e-04)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第34次成功)
+   柔度: 1.952371e+03 → 1.934550e+03
+   改进: 0.91%
+
+============================================================
+迭代 35/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.120e-05, lambda_max=1.838e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=3.628e+04, gamma_est(J_o)=2.893e+03, sum||Sym(Kθ_j)||_F(all)=3.906e+04, gamma_est(all)=3.135e+03, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.1591865835269832e-09, min_cross_slack=-5.329070518200751e-15, buffer_slack=(1.958e-09,1.069e-08)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈2.354e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=7.341e-03
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.587960e-02)
+    A变化: 3.670378e-03 (最大变化: 1.003690e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第35次成功)
+   柔度: 1.934550e+03 → 1.917907e+03
+   改进: 0.86%
+
+============================================================
+迭代 36/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.145e-05, lambda_max=2.697e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.046e+05, gamma_est(J_o)=8.323e+03, sum||Sym(Kθ_j)||_F(all)=1.125e+05, gamma_est(all)=9.017e+03, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=6.279265163389169e-10, min_cross_slack=-2.6645352591003757e-15, buffer_slack=(1.066e-09,5.837e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈3.477e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=8.381e-03
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.582111e-02)
+    A变化: 4.190686e-03 (最大变化: 1.598814e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第36次成功)
+   柔度: 1.917907e+03 → 1.902128e+03
+   改进: 0.82%
+
+============================================================
+迭代 37/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.155e-05, lambda_max=4.017e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=3.056e+05, gamma_est(J_o)=2.427e+04, sum||Sym(Kθ_j)||_F(all)=3.286e+05, gamma_est(all)=2.628e+04, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=3.8998830206860013e-10, min_cross_slack=-1.3322676295501878e-15, buffer_slack=(6.640e-10,3.608e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈5.624e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=1.015e-02
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.583528e-02)
+    A变化: 5.075896e-03 (最大变化: 2.159204e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第37次成功)
+   柔度: 1.902128e+03 → 1.886883e+03
+   改进: 0.80%
+
+============================================================
+迭代 38/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.083e-05, lambda_max=6.090e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=9.534e+05, gamma_est(J_o)=7.559e+04, sum||Sym(Kθ_j)||_F(all)=1.025e+06, gamma_est(all)=8.185e+04, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=2.1088545840153294e-10, min_cross_slack=-6.661338147750939e-16, buffer_slack=(3.572e-10,1.903e-09)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈7.499e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=8.438e-03
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.620527e-02)
+    A变化: 4.218794e-03 (最大变化: 1.861752e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第38次成功)
+   柔度: 1.886883e+03 → 1.871692e+03
+   改进: 0.81%
+
+============================================================
+迭代 39/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.017e-05, lambda_max=7.627e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=4.231e+06, gamma_est(J_o)=3.357e+05, sum||Sym(Kθ_j)||_F(all)=4.580e+06, gamma_est(all)=3.662e+05, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=9.337250705912514e-06, min_cross_slack=-4.440892098500626e-16, buffer_slack=(1.828e-10,9.591e-10)
+✅ 梯度缓存成功
+  Line search (SPD guard): α_final=0.500 | tried: 1.000 → 0.500 | cond(K_ff)≈7.645e+05
+  Step norms: ||Δθ||2=8.727e-02, ||ΔA||2=7.375e-03
+  变化情况:
+    θ变化: 4.363323e-02 (最大变化: 1.643394e-02)
+    A变化: 3.687621e-03 (最大变化: 1.430053e-03)
+  Quality backtracking: α=0.500, ρ=1.000
+Trust region: 0.0873 -> 0.0873 (EXPAND)
+✅ 接受步长 (第39次成功)
+   柔度: 1.871692e+03 → 1.856203e+03
+   改进: 0.83%
+
+============================================================
+迭代 40/80
+============================================================
+求解联合线性化子问题...
+[SCP-SDP] n_free=70, m=222, lambda_min(K_aff@k)=1.059e-05, lambda_max=8.095e+00
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=3.666e+06, gamma_est(J_o)=2.919e+05, sum||Sym(Kθ_j)||_F(all)=4.059e+06, gamma_est(all)=3.261e+05, TR=8.727e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=1.3050414846033087e-05, min_cross_slack=0.0, buffer_slack=(1.318e-10,5.384e-10)
+❌ 迭代 40 失败: MOSEK solve failed for SDP subproblem: Solver 'MOSEK' failed. Try another solver, or solve with verbose=True for more information.
+
+⚠️ Optimization terminated with an error. Partial results will be used for exports.
+   Reason: MOSEK solve failed for SDP subproblem: Solver 'MOSEK' failed. Try another solver, or solve with verbose=True for more information.
+Current compliance at failure: 1.856203e+03
+Failed to save figures: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+Partial figures correspond to the last accepted iterate.

@@ -2,6 +2,7 @@ import argparse
 import json
 import sys
 import os
+import math
 from pathlib import Path
 
 from .scp_optimizer import SequentialConvexTrussOptimizer
@@ -28,6 +29,7 @@ def parse_args(argv=None):
     p.add_argument('--sdp-lmi-eps', type=float, default=0.0, help='Optional small slack eps for LMI: [K f; f^T t] >> eps*I')
     p.add_argument('--sdp-verbose', action='store_true', help='Enable solver verbose for single fixed-geometry SDP')
     p.add_argument('--simple-loads', action='store_true', help='Use simple hydrostatic loads at load nodes (radial in), bypass shell FEA')
+    p.add_argument('--enforce-symmetry', action='store_true', help='Enforce mirror symmetry constraints on theta variables')
     return p.parse_args(argv)
 
 
@@ -64,7 +66,8 @@ def main(argv=None):
         middle_layer_ratio=args.middle_layer_ratio,
         enable_aasi=args.enable_aasi,
         polar_rings=rings,
-        simple_loads=bool(args.simple_loads)
+        simple_loads=bool(args.simple_loads),
+        enforce_symmetry=bool(args.enforce_symmetry)
     )
     opt.optimization_params.max_iterations = int(args.max_iterations)
     # Optionally save pre-optimization ground structure (baseline)
@@ -153,11 +156,40 @@ def main(argv=None):
                 print(f"Warning: failed saving figures for single subproblem: {e}")
         return 0
     
-    opt.solve_scp_optimization()
+    optimization_failed = False
+    failure_exc = None
+    try:
+        opt.solve_scp_optimization()
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        optimization_failed = True
+        failure_exc = exc
+        print("\n⚠️ Optimization terminated with an error. Partial results will be used for exports.")
+        print(f"   Reason: {exc}")
 
-    print("\nOptimization finished.")
-    if getattr(opt, 'final_compliance', None) is not None:
-        print(f"Final compliance: {opt.final_compliance:.6e}")
+    history_dir = args.save_figs if args.save_figs else 'results'
+    try:
+        opt._export_iteration_state_logs(history_dir)
+    except Exception as e:
+        print(f"Warning: failed to export theta/area history: {e}")
+
+    if optimization_failed:
+        if getattr(opt, 'final_areas', None) is None:
+            opt.final_areas = getattr(opt, 'current_areas', None)
+        if getattr(opt, 'final_angles', None) is None:
+            opt.final_angles = getattr(opt, 'current_angles', None)
+        if getattr(opt, 'final_compliance', None) is None:
+            opt.final_compliance = getattr(opt, 'current_compliance', None)
+
+    if not optimization_failed:
+        print("\nOptimization finished.")
+        if getattr(opt, 'final_compliance', None) is not None:
+            print(f"Final compliance: {opt.final_compliance:.6e}")
+    else:
+        current_c = getattr(opt, 'current_compliance', None)
+        if current_c is not None and math.isfinite(current_c):
+            print(f"Current compliance at failure: {current_c:.6e}")
 
     # Optional figure saving
     if args.save_figs:
@@ -199,15 +231,26 @@ def main(argv=None):
             viz.plot_single_figure(opt, figure_type="area_histogram",
                                    save_path=os.path.join(out_dir, "area_histogram.png"), figsize=(8, 6))
 
+            # Compliance evolution
+            try:
+                viz.plot_compliance_evolution(opt, save_path=os.path.join(out_dir, "compliance_evolution.png"), show_plot=False)
+            except Exception as e:
+                print(f"Warning: compliance plot failed: {e}")
+
             # Trust region evolution
             try:
                 viz.plot_trust_region_evolution_only(opt, save_path=os.path.join(out_dir, "trust_region_evolution.png"), show_plot=False)
             except Exception as e:
                 print(f"Warning: trust region plot failed: {e}")
 
+
             print(f"Figures saved to: {out_dir}")
+            if optimization_failed:
+                print("Partial figures correspond to the last accepted iterate.")
         except Exception as e:
             print(f"Failed to save figures: {e}")
+            if optimization_failed:
+                print("Partial figures correspond to the last accepted iterate.")
 
     return 0
 

@@ -174,3 +174,28 @@
 > 4) PolarGeometry integration (Batch 4)
 >    - Inject PolarGeometry; adapt nodes/elements/load_nodes/fixed_dofs/free_dofs; keep assembly/load interfaces.
 > 5) Optional: linearized min member length constraint (off by default).
+## 对称约束集成计划（2025-09-16）
+
+- 背景：当前子问题仅施加边界/信赖域等约束，需要为半圆结构引入轴对称性。
+1. 在 `PolarGeometry` 或初始化阶段梳理对称轴（默认 y 轴），生成每个环的镜像节点对，过滤掉支撑及轴线上单点，将结果缓存到优化器。
+2. 在 `_initialize_optimization_variables` 之后，将节点对映射到 `theta` 变量索引，写入 `self.symmetry_pairs`，并对奇数节点的中心点施加 `theta=π/2` 固定策略。
+3. 在 `SubproblemSolver.solve_linearized_subproblem` 中读取 `self.symmetry_pairs`，对每一对 `(i,j)` 添加线性等式约束 `theta[i] + theta[j] == π`（数值上使用 `float(np.pi)`），确保对称节点角度同时更新。
+4. 提供布尔开关（CLI `--enforce-symmetry` -> 优化器 `enable_symmetry`），默认关闭；当检测到载荷或支撑不对称时给出告警并跳过约束。
+5. 调整日志/导出：在 step details 中记录对称配对数，在可视化前验证 `x` 坐标镜像误差，超限则提示回滚或放宽信赖域。
+6. 验证路径：以 `--simple-loads` 场景运行 2~3 步迭代，确认 `theta` 和最终结构满足镜像；再对人为扰动的载荷测试自动降级分支。
+7. 载荷保持原有计算逻辑：壳体/简单模式均按当前几何逐节点给出径向力值，不做强制对称化；仅在节点集合不成镜像时禁用对称约束。
+
+8. 新增自动导出的 compliance_evolution.png，基于 compliance_history 展示接受步柔度的变化，可用于论文附图。
+
+## 节点融合策略讨论（2025-09-17）
+- 参考文献《Truss Geometry and Topology Optimization with Global Stability Constraints》，计划将节点融合阈值设为相连杆件的欧氏长度 < 0.25 m。
+- 判据从现有的“投影到固定半径”改为使用真实几何：利用节点间实际杆件长度 L_min 触发融合，而非环/索引推断。
+- 合并对象覆盖所有节点：若组内包含支撑节点，直接保留支撑节点作为代表，以确保支撑位置不移动。
+- 阶段划分将调整：节点融合应在 Phase A 即可生效，避免因密集节点导致的数值退化阻止进入 Phase B。
+- 下一步将重构 `NodeMerger` 与调用路径，使其基于 `theta_node_ids` + 实际坐标执行，并允许在融合前做 dry-run 检查。
+
+### 改造计划
+1. 重构 `NodeMerger` 接口：以 `theta_node_ids` + 实际坐标为输入，支持全体节点并保持支撑节点为代表；新增 0.25 m 阈值配置。
+2. 在初始化阶段构建节点 L_min：基于当前杆件长度计算每个节点的最短相连杆件，为融合判据提供输入。
+3. 调整优化流程：在每次接受步后（Phase A 起生效）运行融合检测，dry-run 输出候选合并组，再在确认逻辑通过后执行合并并刷新几何/约束。
+4. 记录和验证：融合后重新导出 `theta_history`/`area_history`，并加入 sanity check（节点数、DOF、支撑节点位置）。

@@ -5,7 +5,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import warnings
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import json
 import csv
 import os
@@ -35,7 +35,8 @@ class SequentialConvexTrussOptimizer:
                  enable_middle_layer=False, middle_layer_ratio=0.85,
                  enable_aasi: bool = False,
                  polar_rings: 'Optional[list]' = None,
-                 simple_loads: bool = False):
+                 simple_loads: bool = False,
+                 enforce_symmetry: bool = False):
         """初始化优化器"""
         print("初始化SCP...")
         
@@ -46,6 +47,8 @@ class SequentialConvexTrussOptimizer:
         self.middle_layer_ratio = middle_layer_ratio
         # 是否启用 AASI 稳定性约束（用于对照消融实验）
         self.enable_aasi = enable_aasi
+        # 是否启用对称约束
+        self.enable_symmetry = bool(enforce_symmetry)
 
         # 1. 初始化基础系统
         polar_config = {"rings": polar_rings} if polar_rings else None
@@ -182,6 +185,8 @@ class SequentialConvexTrussOptimizer:
         self.trust_radius_changes = []  # 记录变化事件
         # 接受步后的柔度历史（单调不增）
         self.compliance_history = []
+        self.theta_history_records = []
+        self.area_history_records = []
         # 分阶段控制与统计
         self.phase = 'A'  # A: 拓扑成形; B: 几何细化; C: 稳定性强化
         self._accepted_window = []  # 最近接受步的 (removed_count, improvement%)
@@ -190,6 +195,9 @@ class SequentialConvexTrussOptimizer:
         self.step_norm_history = []  # [(||dtheta||2, ||dA||2)]
         # per-node angular move caps (aligned with theta_node_ids)
         self.theta_move_caps = None
+        self.symmetry_pairs = []
+        self.symmetry_fixed_indices = []
+        self.symmetry_active = False
 
     def _update_theta_move_caps(self, theta_len: int):
         """Compute per-node move caps based on incident shortest member length.
@@ -288,7 +296,108 @@ class SequentialConvexTrussOptimizer:
         self.initial_angles = theta_k.copy()
         # 记录 θ 映射（按当前优化变量的节点顺序）
         self.theta_node_ids = theta_ids
+        self._prepare_symmetry_constraints(theta_ids)
         return theta_k, A_k
+
+    def _prepare_symmetry_constraints(self, theta_ids: List[int]) -> None:
+        """构建 θ 变量索引上的对称配对关系。"""
+        self.symmetry_pairs = []
+        self.symmetry_fixed_indices = []
+        self.symmetry_active = False
+        if not getattr(self, 'enable_symmetry', False):
+            return
+        pg = getattr(self, 'polar_geometry', None)
+        if pg is None or not getattr(pg, 'nodes', None):
+            print('对称约束已跳过：PolarGeometry 不可用。')
+            self.enable_symmetry = False
+            return
+        nodes_by_id = {int(node.id): node for node in pg.nodes}
+        free_ids = [int(nid) for nid in theta_ids]
+        if not free_ids:
+            print('对称约束已跳过：无自由节点。')
+            self.enable_symmetry = False
+            return
+        angle_tol = 1e-6
+        center_tol = 1e-6
+        radius_precision = 6
+        node_sets = [
+            ('载荷', [int(i) for i in getattr(self.geometry, 'load_nodes', []) or []]),
+            ('支撑', [int(i) for i in getattr(self.geometry, 'support_nodes', []) or []]),
+        ]
+        for label, ids in node_sets:
+            if ids and not self._check_node_set_symmetry(ids, nodes_by_id, angle_tol, center_tol):
+                print(f'{label}节点不满足镜像，对称约束已停用。')
+                self.enable_symmetry = False
+                return
+        groups: dict = {}
+        for idx_theta, nid in enumerate(free_ids):
+            node = nodes_by_id.get(nid)
+            if node is None or getattr(node, 'is_fixed', False):
+                continue
+            key = (getattr(node, 'node_type', 'ring'), round(float(node.radius), radius_precision))
+            groups.setdefault(key, []).append((idx_theta, float(node.theta)))
+        if not groups:
+            print('对称约束已跳过：无可配对节点。')
+            self.enable_symmetry = False
+            return
+        pair_list = []
+        fixed_indices = []
+        for key, items in groups.items():
+            if not items:
+                continue
+            items.sort(key=lambda item: item[1])
+            left, right = 0, len(items) - 1
+            while left < right:
+                idx_l, theta_l = items[left]
+                idx_r, theta_r = items[right]
+                if abs((theta_l + theta_r) - np.pi) <= angle_tol:
+                    pair = (idx_l, idx_r) if idx_l < idx_r else (idx_r, idx_l)
+                    pair_list.append(pair)
+                    left += 1
+                    right -= 1
+                else:
+                    print(f"对称约束已停用：半径 {key[1]:.6f} 存在不成镜像的节点对 (θ={theta_l:.6f}, θ={theta_r:.6f})。")
+                    self.enable_symmetry = False
+                    return
+            if left == right:
+                idx_c, theta_c = items[left]
+                if abs(theta_c - (np.pi / 2.0)) <= center_tol:
+                    fixed_indices.append(idx_c)
+                else:
+                    print(f"对称约束已停用：半径 {key[1]:.6f} 存在未匹配的节点 (θ={theta_c:.6f})。")
+                    self.enable_symmetry = False
+                    return
+        if not pair_list and not fixed_indices:
+            print('对称约束已跳过：无可匹配的自由节点。')
+            self.enable_symmetry = False
+            return
+        unique_pairs = sorted(set(pair_list))
+        unique_fixed = sorted(set(fixed_indices))
+        self.symmetry_pairs = unique_pairs
+        self.symmetry_fixed_indices = unique_fixed
+        self.symmetry_active = True
+        print(f"对称约束已启用：{len(unique_pairs)} 组镜像节点，{len(unique_fixed)} 个节点固定在 pi/2。")
+
+    def _check_node_set_symmetry(self, node_ids: List[int], nodes_by_id: dict, angle_tol: float, center_tol: float) -> bool:
+        """判断给定节点集合在 θ 上是否关于 y 轴对称。"""
+        angles: List[float] = []
+        for nid in node_ids:
+            node = nodes_by_id.get(int(nid))
+            if node is not None:
+                angles.append(float(node.theta))
+        if not angles:
+            return True
+        angles.sort()
+        left, right = 0, len(angles) - 1
+        while left < right:
+            if abs((angles[left] + angles[right]) - np.pi) > angle_tol:
+                return False
+            left += 1
+            right -= 1
+        if left == right:
+            if abs(angles[left] - (np.pi / 2.0)) > center_tol:
+                return False
+        return True
 
     def _compute_member_forces_and_lengths(self, theta: np.ndarray, A: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """计算每根构件的轴力 N_i 与长度 L_i（约定受压为正）。"""
@@ -387,6 +496,7 @@ class SequentialConvexTrussOptimizer:
         # 🔧 修复：立即设置当前状态，避免None值错误
         self.current_angles = theta_k
         self.current_areas = A_k
+        self._record_iteration_state(0, theta_k, A_k)
         # 初始化接受历史（第0次）
         self.compliance_history = [self.current_compliance]
         
@@ -648,6 +758,7 @@ class SequentialConvexTrussOptimizer:
                     # 保存当前状态
                     self.current_angles = theta_k
                     self.current_areas = A_k
+                    self._record_iteration_state(self.iteration_count + 1, theta_k, A_k)
                     # 记录接受后的柔度
                     self.compliance_history.append(self.current_compliance)
                     # 回写接受标记到最后一个 step_detail
@@ -1040,6 +1151,122 @@ class SequentialConvexTrussOptimizer:
             print(f"   ⚠️  载荷计算器重新初始化失败: {e}")
             # 如果重新初始化失败，继续使用原来的计算器
 
+    def _record_iteration_state(self, iteration: int, theta_vec: np.ndarray, area_vec: np.ndarray) -> None:
+        """记录每次迭代的角度和面积，供事后分析使用。"""
+        if not hasattr(self, 'theta_history_records') or self.theta_history_records is None:
+            self.theta_history_records = []
+        if not hasattr(self, 'area_history_records') or self.area_history_records is None:
+            self.area_history_records = []
+        theta_arr = None
+        area_arr = None
+        try:
+            if theta_vec is not None:
+                theta_arr = np.asarray(theta_vec, dtype=float).ravel()
+        except Exception:
+            theta_arr = None
+        try:
+            if area_vec is not None:
+                area_arr = np.asarray(area_vec, dtype=float).ravel()
+        except Exception:
+            area_arr = None
+        if theta_arr is not None:
+            try:
+                node_ids = list(self.theta_node_ids[:theta_arr.size]) if getattr(self, 'theta_node_ids', None) else list(range(theta_arr.size))
+            except Exception:
+                node_ids = list(range(theta_arr.size))
+            if len(node_ids) < theta_arr.size:
+                node_ids.extend(list(range(len(node_ids), theta_arr.size)))
+            radius_cache = getattr(self, '_node_radius_cache', None)
+            if radius_cache is None:
+                radius_cache = {}
+                self._node_radius_cache = radius_cache
+
+            def _resolve_radius(nid: int) -> float:
+                cached = radius_cache.get(nid)
+                if cached is not None:
+                    return cached
+                radius_val = None
+                pg = getattr(self, 'polar_geometry', None)
+                if pg is not None:
+                    try:
+                        node_obj = pg.nodes[nid]
+                        radius_val = float(getattr(node_obj, 'radius'))
+                    except Exception:
+                        radius_val = None
+                if radius_val is None:
+                    try:
+                        coords = np.asarray(self.geometry.nodes[nid], dtype=float)
+                        radius_val = float(np.hypot(coords[0], coords[1]))
+                    except Exception:
+                        radius_val = None
+                if radius_val is None:
+                    radius_val = float('nan')
+                radius_cache[nid] = radius_val
+                return radius_val
+
+            for idx, val in enumerate(theta_arr):
+                node_id = int(node_ids[idx]) if idx < len(node_ids) else int(idx)
+                radius_val = _resolve_radius(node_id)
+                self.theta_history_records.append((int(iteration), node_id, float(radius_val), float(val)))
+        if area_arr is not None:
+            for eid, val in enumerate(area_arr):
+                self.area_history_records.append((int(iteration), int(eid), float(val)))
+
+
+    def _export_iteration_state_logs(self, export_dir: str = 'results') -> None:
+        """将θ和面积的迭代历史导出为CSV。"""
+        theta_records = getattr(self, 'theta_history_records', None)
+        area_records = getattr(self, 'area_history_records', None)
+        if not theta_records and not area_records:
+            return
+        try:
+            os.makedirs(export_dir, exist_ok=True)
+            if theta_records:
+                theta_path = os.path.join(export_dir, 'theta_history.csv')
+                with open(theta_path, 'w', newline='', encoding='utf-8') as f_theta:
+                    writer = csv.writer(f_theta)
+                    writer.writerow(['iteration', 'node_id', 'radius', 'theta_rad', 'theta_deg'])
+                    for record in theta_records:
+                        radius_val = None
+                        if isinstance(record, dict):
+                            iteration = record.get('iteration')
+                            node_id = record.get('node_id')
+                            theta_val = record.get('theta_rad', record.get('theta')) if isinstance(record, dict) else None
+                            if radius_val is None:
+                                radius_val = record.get('radius', record.get('radius_m', record.get('radius_val')))
+                        else:
+                            if len(record) >= 4:
+                                iteration, node_id, radius_val, theta_val = record[:4]
+                            elif len(record) == 3:
+                                iteration, node_id, theta_val = record
+                            else:
+                                continue
+                        try:
+                            iteration = int(iteration)
+                            node_id = int(node_id)
+                        except Exception:
+                            continue
+                        try:
+                            theta_float = float(theta_val)
+                        except Exception:
+                            continue
+                        try:
+                            radius_float = float(radius_val)
+                        except Exception:
+                            radius_float = float('nan')
+                        radius_out = '' if not np.isfinite(radius_float) else radius_float
+                        writer.writerow([iteration, node_id, radius_out, theta_float, float(np.degrees(theta_float))])
+
+            if area_records:
+                area_path = os.path.join(export_dir, 'area_history.csv')
+                with open(area_path, 'w', newline='', encoding='utf-8') as f_area:
+                    writer = csv.writer(f_area)
+                    writer.writerow(['iteration', 'element_id', 'area'])
+                    for iteration, element_id, area_val in area_records:
+                        writer.writerow([iteration, element_id, area_val])
+        except Exception as exp:
+            print(f"⚠️ 导出 theta/area 历史失败: {exp}")
+
     def _append_iteration_log(self, row: dict, filepath: str = 'optimization_log.csv'):
         """将关键迭代参数追加写入CSV日志。
         字段包含：迭代号、phase、α（SPD/最终）、试探记录、ρ、cond、步长范数、信赖域变化、是否接受、柔度等。
@@ -1252,3 +1479,4 @@ if __name__ == "__main__":
         print(f"📊 Final structure has {np.sum(optimizer.final_areas > optimizer.removal_threshold)} effective members")
     else:
         print("\n❌ Optimization failed. Please check the error messages above.")
+

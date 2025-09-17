@@ -21,7 +21,7 @@ class TrustRegionParams:
     """Trust region configuration."""
 
     initial_radius: float = np.pi / 180.0
-    max_radius: float = np.pi / 90.0
+    max_radius: float = np.deg2rad(5.0)
     min_radius: float = np.pi / 720.0
 
     shrink_factor: float = 0.5
@@ -36,7 +36,7 @@ class GeometryParams:
 
     min_angle_spacing: float = np.pi / 180.0
     boundary_buffer: float = np.pi / 180.0
-    neighbor_move_cap: float = np.deg2rad(2.0)
+    neighbor_move_cap: float = np.deg2rad(5.0)
     neighbor_move_eps: float = 1e-3
 
 
@@ -45,8 +45,8 @@ class OptimizationParams:
     """Optimization configuration."""
 
     max_iterations: int = 30
-    convergence_tol: float = 1e-4
-    gradient_fd_step: float = 1e-6
+    convergence_tol: float = 1e-3
+    gradient_fd_step: float = 1e-5
 
 
 # ==========================
@@ -504,6 +504,16 @@ class SubproblemSolver:
                     cap_i = float(caps[i])
                     constraints.append(theta[i] <= theta_k[i] + cap_i)
                     constraints.append(theta[i] >= theta_k[i] - cap_i)
+
+            if getattr(self.opt, 'symmetry_active', False):
+                pairs = getattr(self.opt, 'symmetry_pairs', []) or []
+                for (i_idx, j_idx) in pairs:
+                    if i_idx < n and j_idx < n:
+                        constraints.append(theta[i_idx] + theta[j_idx] == float(np.pi))
+                fixed_idx = getattr(self.opt, 'symmetry_fixed_indices', []) or []
+                for idx in fixed_idx:
+                    if idx < n:
+                        constraints.append(theta[idx] == float(np.pi / 2.0))
 
         # Area constraints
         if m > 0:

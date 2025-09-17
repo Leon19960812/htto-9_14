@@ -69,7 +69,9 @@ htto-9_8_version/
 - `scp_optimizer.py`
   - 集成 `PolarGeometry` 为几何真源；逐步弃用 `TrussSystemInitializer` 的几何生成。
 - `node_merger.py`
-  - 一维 θ + `node_id` 映射；融合后重建变量与 DOF；支撑优先保留代表。
+  - 一维 θ + `node_id` 映射；融合后重建变量与 DOF；支撑优先保留代表
+- `visualization.py`
+  - 输出最终结构、载荷分布，并新增 `compliance_evolution.png` 展示柔度演化曲线
 
 ## 需要修改的文件（按顺序）
 1) 三大核心重写：`scp_optimizer.py`、`algorithm_modules.py`、`truss_system_initializer.py`
@@ -80,6 +82,7 @@ htto-9_8_version/
 ## 约束策略
 - 边界：逐点 `boundary_buffer ≤ θ ≤ π - boundary_buffer`
 - 信赖域：`||θ − θ_k||₂ ≤ r` + 逐点步长帽 `|θ_i − θ_{k,i}| ≤ cap_i`
+- 可选对称：`--enforce-symmetry` 启用镜像节点等式约束；载荷/支撑不对称时自动降级
 - 可选兜底：静态“邻接对 min_spacing”约束（默认关闭）
 
 ## 现状
