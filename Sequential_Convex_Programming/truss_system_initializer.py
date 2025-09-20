@@ -7,7 +7,7 @@ ground structure generation. Comments are in English; UTF-8 + LF.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import numpy as np
 
 
@@ -359,6 +359,7 @@ class TrussSystemInitializer:
         self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
         self.load_data = self.load_calc.compute_hydrostatic_loads(self.geometry, self.depth, self.radius, np.asarray(self.geometry.nodes, dtype=float))
         self.unit_stiffness_matrices = self.stiffness_calc.precompute_unit_stiffness_matrices(self.geometry, self.element_lengths)
+        self.node_min_lengths = self.compute_node_min_edge_lengths()
         self.constraint_data = self.constraint_calc.initialize_constraints(self.geometry, self.element_lengths, self.volume_fraction, self.material_data.A_max)
         fixed_dofs, free_dofs = self.constraint_calc.setup_boundary_conditions(self.geometry)
         self.constraint_data.fixed_dofs = fixed_dofs
@@ -429,13 +430,39 @@ class TrussSystemInitializer:
         print(f"  Fixed DOFs: {len(self.fixed_dofs)}  Free DOFs: {len(self.free_dofs)}")
 
     # Delegation to node merger utilities
-    def group_nodes_by_radius(self, theta: np.ndarray, radius: float = None) -> List[List[int]]:
+    def find_merge_groups(
+        self,
+        theta_ids: List[int],
+        merge_threshold: float = 0.1,
+        areas: Optional[np.ndarray] = None,
+        removal_threshold: Optional[float] = None,
+    ) -> List[List[int]]:
         from .node_merger import NodeMerger
-        return NodeMerger(self.geometry, self.radius, self.constraint_calc).group_nodes_by_radius(theta, radius)
 
-    def merge_node_groups(self, theta: np.ndarray, A: np.ndarray, merge_groups: List[List[int]]):
-        from .node_merger import NodeMerger
-        result = NodeMerger(self.geometry, self.radius, self.constraint_calc).merge_node_groups(theta, A, merge_groups)
+        merger = NodeMerger(self.geometry, self.constraint_calc, merge_threshold)
+        groups = merger.find_merge_groups(
+            theta_ids=theta_ids,
+            merge_threshold=merge_threshold,
+            active_areas=areas,
+            removal_threshold=removal_threshold,
+        )
+        self.compute_node_min_edge_lengths(areas, removal_threshold)
+        return groups
+
+    def merge_node_groups(
+        self,
+        theta: np.ndarray,
+        theta_ids: List[int],
+        A: np.ndarray,
+        merge_groups: List[List[int]],
+        merge_threshold: float = None,
+    ):
+        from .node_merger import NodeMerger, MERGE_THRESHOLD_DEFAULT
+
+        threshold = MERGE_THRESHOLD_DEFAULT if merge_threshold is None else float(merge_threshold)
+        merger = NodeMerger(self.geometry, self.constraint_calc, threshold)
+        result = merger.merge_node_groups(theta, theta_ids, A, merge_groups)
+
         if result.structure_modified:
             self.geometry = result.geometry_updated
             self.nodes = self.geometry.nodes
@@ -452,7 +479,29 @@ class TrussSystemInitializer:
             "merged_pairs": result.merged_pairs,
             "removed_members": result.removed_members,
             "theta_updated": result.theta_updated,
+            "theta_ids_updated": result.theta_ids_updated,
             "A_updated": result.A_updated,
             "geometry_updated": result.geometry_updated,
             "structure_modified": result.structure_modified,
         }
+
+    def compute_node_min_edge_lengths(
+        self,
+        areas: Optional[np.ndarray] = None,
+        removal_threshold: Optional[float] = None,
+    ) -> np.ndarray:
+        coords = np.asarray(self.geometry.nodes, dtype=float)
+        n_nodes = coords.shape[0]
+        mins = np.full(n_nodes, np.inf, dtype=float)
+        for eid, (n1, n2) in enumerate(self.geometry.elements):
+            if areas is not None and removal_threshold is not None and eid < len(areas):
+                if float(areas[eid]) <= float(removal_threshold):
+                    continue
+            dx = coords[n1, 0] - coords[n2, 0]
+            dy = coords[n1, 1] - coords[n2, 1]
+            length = float(np.hypot(dx, dy))
+            mins[n1] = min(mins[n1], length)
+            mins[n2] = min(mins[n2], length)
+        mins[np.isinf(mins)] = 0.0
+        self.node_min_lengths = mins
+        return mins

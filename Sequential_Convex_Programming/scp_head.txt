@@ -567,7 +567,7 @@ class SequentialConvexTrussOptimizer:
                                 print("[Phase Switch] AASI 已禁用，跳过进入 C 阶段")
 
                     # 节点融合检查
-                    merge_groups = self.initializer.group_nodes_by_radius(theta_k)
+                    merge_groups = self.initializer.find_merge_groups(self.theta_node_ids, merge_threshold=self.node_merge_threshold, areas=A_k, removal_threshold=self.removal_threshold)
                     if (self.phase in ('B', 'C')) and merge_groups:
                         merge_info = self.initializer.merge_node_groups(theta_k, A_k, merge_groups)
                         

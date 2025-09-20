@@ -22,24 +22,43 @@ class TrussVisualization:
         Returns a list (may contain 2 or 4 ids, unique-preserved order).
         """
         import numpy as _np
+
+        def _normalize_ids(value) -> list:
+            if value is None:
+                return []
+            try:
+                arr = np.asarray(value, dtype=int)
+                if arr.size == 0:
+                    return []
+                return arr.reshape(-1).tolist()
+            except Exception:
+                try:
+                    return [int(v) for v in value if v is not None]
+                except Exception:
+                    return []
+
         try:
-            explicit = getattr(getattr(optimizer, 'geometry', optimizer), 'support_nodes', None)
+            explicit_raw = getattr(getattr(optimizer, 'geometry', optimizer), 'support_nodes', None)
+            explicit = _normalize_ids(explicit_raw)
             if explicit:
-                return list(dict.fromkeys(int(n) for n in explicit))
+                return list(dict.fromkeys(explicit))
+
             coords = _np.asarray(getattr(optimizer, 'nodes', None), dtype=float)
             n_nodes = coords.shape[0] if coords is not None else int(getattr(optimizer, 'n_nodes', 0))
+
             def endpoints(ids):
-                if not ids or len(ids) < 2 or coords is None or not coords.size:
+                ids_norm = _normalize_ids(ids)
+                if len(ids_norm) < 2 or coords is None or not coords.size:
                     return []
-                cand = _np.asarray(ids, dtype=int)
+                cand = _np.asarray(ids_norm, dtype=int)
                 ang = _np.arctan2(coords[cand, 1], coords[cand, 0])
                 i_min = int(cand[int(_np.argmin(ang))])
                 i_max = int(cand[int(_np.argmax(ang))])
                 return [i_min, i_max] if i_min != i_max else [i_min]
 
-            inner = getattr(optimizer, 'inner_nodes', []) or []
-            middle = getattr(optimizer, 'middle_nodes', []) or []
-            outer = getattr(optimizer, 'outer_nodes', []) or []
+            inner = _normalize_ids(getattr(optimizer, 'inner_nodes', None))
+            middle = _normalize_ids(getattr(optimizer, 'middle_nodes', None))
+            outer = _normalize_ids(getattr(optimizer, 'outer_nodes', None))
 
             sup = []
             sup += endpoints(inner)
@@ -47,14 +66,15 @@ class TrussVisualization:
             if not sup:
                 sup += endpoints(outer)
             if not sup:
-                ln = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', [])) or []
-                sup += endpoints(ln)
-            # Unique-preserve
+                ln_raw = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', None))
+                sup += endpoints(_normalize_ids(ln_raw))
+
             seen = set()
             sup_u = []
             for nid in sup:
                 if nid not in seen:
-                    sup_u.append(nid); seen.add(nid)
+                    sup_u.append(nid)
+                    seen.add(nid)
             if sup_u:
                 return sup_u
         except Exception:

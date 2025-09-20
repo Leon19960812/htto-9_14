@@ -81,7 +81,8 @@ class SequentialConvexTrussOptimizer:
         # 严格模式：出现异常不做兜底回退，直接抛错终止
         self.strict_mode = True
         # 节点融合开关（默认禁用；逐步打通后可启用）
-        self.enable_node_merge = False
+        self.enable_node_merge = True
+        self.node_merge_threshold = 0.025
 
     # -------------------------------------------------------------
     # Utility: run a single SDP subproblem for diagnostics/benchmark
@@ -317,8 +318,8 @@ class SequentialConvexTrussOptimizer:
             print('对称约束已跳过：无自由节点。')
             self.enable_symmetry = False
             return
-        angle_tol = 1e-6
-        center_tol = 1e-6
+        angle_tol = 1e-5
+        center_tol = 1e-5
         radius_precision = 6
         node_sets = [
             ('载荷', [int(i) for i in getattr(self.geometry, 'load_nodes', []) or []]),
@@ -782,50 +783,83 @@ class SequentialConvexTrussOptimizer:
                                 # 禁用 AASI 时不进入 C，相当于仅进行 A/B 阶段的对照实验
                                 print("[Phase Switch] AASI 已禁用，跳过进入 C 阶段")
 
-                    # 节点融合检查（可禁用）
+                    # 同步几何到最新 theta，用于后续融合与导出
+                    try:
+                        coords_latest = self._update_node_coordinates(theta_k)
+                        nodes_list = coords_latest.tolist() if hasattr(coords_latest, 'tolist') else list(coords_latest)
+                        self.geometry.nodes = nodes_list
+                        self.nodes = nodes_list
+                        if hasattr(self.initializer, 'geometry'):
+                            self.initializer.geometry.nodes = nodes_list
+                            if hasattr(self.initializer, 'nodes'):
+                                self.initializer.nodes = nodes_list
+                    except Exception as e:
+                        print(f'[NodeMerge] warning: failed to sync geometry before merge: {e}')
+                    
+                    # 节点融合（直接在 Phase A 起生效）
                     if getattr(self, 'enable_node_merge', False):
-                        merge_groups = self.initializer.group_nodes_by_radius(theta_k)
-                        if (self.phase in ('B', 'C')) and merge_groups:
-                            merge_info = self.initializer.merge_node_groups(theta_k, A_k, merge_groups)
-                        
+                        theta_ids_current = list(self.theta_node_ids) if getattr(self, 'theta_node_ids', None) else []
+                        merge_threshold = getattr(self, 'node_merge_threshold', 0.1)
+                        merge_groups = self.initializer.find_merge_groups(
+                            theta_ids=theta_ids_current,
+                            merge_threshold=merge_threshold,
+                            areas=A_k,
+                            removal_threshold=getattr(self, 'removal_threshold', None),
+                        )
+                        if merge_groups:
+                            def _fmt_group(group):
+                                head = group[0]
+                                tail = ','.join(str(n) for n in group[1:])
+                                return f"{head}<-" + (f"({tail})" if tail else '')
+                            preview_groups = ', '.join(_fmt_group(g) for g in merge_groups[:3])
+                            if len(merge_groups) > 3:
+                                preview_groups += ', ...'
+                            print(f"[NodeMerge] {len(merge_groups)} candidate group(s) @ {merge_threshold:.3f} m: {preview_groups}")
+                            merge_info = self.initializer.merge_node_groups(
+                                theta_k, theta_ids_current, A_k, merge_groups, merge_threshold=merge_threshold
+                            )
+                            symmetry_refresh_needed = False
                             if merge_info['structure_modified']:
-                                # 更新当前状态
                                 theta_k = merge_info['theta_updated']
+                                theta_ids_new = merge_info.get('theta_ids_updated', theta_ids_current)
                                 A_k = merge_info['A_updated']
+                                self.theta_node_ids = theta_ids_new
+                                symmetry_refresh_needed = bool(getattr(self, 'enable_symmetry', False))
                                 self.current_angles = theta_k
                                 self.current_areas = A_k
-                                
-                                # 更新几何结构
+
+                                # 更新几何结构和派生属性
                                 self.initializer.geometry = merge_info['geometry_updated']
                                 self.geometry = merge_info['geometry_updated']
-                                self.elements = self.geometry.elements  # 更新elements引用
-                                # 同步兼容性（legacy）属性，避免可视化和其他模块索引不一致
-                                # 这些属性在初始化时从 geometry 派生，此处必须在几何更新后刷新
                                 self.nodes = self.geometry.nodes
-                                # outer_nodes is deprecated; keep load_nodes only
-                                self.load_nodes = self.geometry.load_nodes
-                                self.inner_nodes = self.geometry.inner_nodes
-                                # 如果存在中间层，刷新中间层节点
+                                self.elements = self.geometry.elements
+                                self.load_nodes = getattr(self.geometry, 'load_nodes', [])
+                                self.inner_nodes = getattr(self.geometry, 'inner_nodes', [])
                                 if hasattr(self.geometry, 'middle_nodes'):
-                                    self.middle_nodes = self.geometry.middle_nodes
-                                
-                                # 重建 θ 映射（按新的 load_nodes 顺序截取）
-                            try:
-                                self.theta_node_ids = list(self.geometry.load_nodes[: len(theta_k)])
-                            except Exception:
-                                self.theta_node_ids = list(range(len(theta_k)))
+                                    self.middle_nodes = getattr(self.geometry, 'middle_nodes')
 
-                            # 更新基本参数
-                            self.n_nodes = merge_info['geometry_updated'].n_nodes
-                            self.n_dof = merge_info['geometry_updated'].n_dof
-                            self.n_elements = merge_info['geometry_updated'].n_elements
-                            
-                            # 更新边界条件
-                            self.fixed_dofs = merge_info['geometry_updated'].fixed_dofs
-                            self.free_dofs = merge_info['geometry_updated'].free_dofs
+                                self.n_nodes = self.geometry.n_nodes
+                                self.n_elements = self.geometry.n_elements
+                                self.n_dof = self.geometry.n_dof
 
-                            # 更新element_lengths
-                            self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+                                self.fixed_dofs = getattr(self.initializer, 'fixed_dofs', getattr(self.geometry, 'fixed_dofs', []))
+                                self.free_dofs = getattr(self.initializer, 'free_dofs', getattr(self.geometry, 'free_dofs', []))
+                                self.element_lengths = getattr(
+                                    self.initializer,
+                                    'element_lengths',
+                                    self.geometry_calc.compute_element_lengths(self.geometry),
+                                )
+                                self.unit_stiffness_matrices = getattr(
+                                    self.initializer,
+                                    'unit_stiffness_matrices',
+                                    self.stiffness_calc.precompute_unit_stiffness_matrices(
+                                        self.geometry, self.element_lengths
+                                    ),
+                                )
+                                try:
+                                    self._update_theta_move_caps(len(theta_k))
+                                except Exception:
+                                    pass
                             
                             # Re-init load_calc (because load_nodes may change)
                             self._reinitialize_load_calculator()
@@ -843,6 +877,11 @@ class SequentialConvexTrussOptimizer:
                                     self.polar_geometry.rebuild_from_geometry(self.geometry)
                             except Exception as _e:
                                 print(f"   ⚠️ 同步 PolarGeometry 失败: {_e}")
+                            if symmetry_refresh_needed:
+                                try:
+                                    self._prepare_symmetry_constraints(self.theta_node_ids)
+                                except Exception as sym_err:
+                                    print(f"   ⚠️ 重新构建对称约束失败: {sym_err}")
                             # 重新计算逐点步长帽
                             try:
                                 self._update_theta_move_caps(len(theta_k))
@@ -1130,7 +1169,7 @@ class SequentialConvexTrussOptimizer:
     def _reinitialize_load_calculator(self):
         """重新初始化载荷计算器（节点融合后需要更新Shell FEA网格）"""
         try:
-            from load_calculator_with_shell import LoadCalculatorWithShell
+            from .load_calculator_with_shell import LoadCalculatorWithShell
             shell_params = {
                 'outer_radius': self.radius,
                 'depth': self.depth,
@@ -1479,4 +1518,5 @@ if __name__ == "__main__":
         print(f"📊 Final structure has {np.sum(optimizer.final_areas > optimizer.removal_threshold)} effective members")
     else:
         print("\n❌ Optimization failed. Please check the error messages above.")
+
 

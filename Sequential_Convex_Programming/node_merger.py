@@ -1,19 +1,15 @@
+
 """
 Node merging utilities (unified 1D theta).
 This module provides distance-based node grouping and merging without any layer concept.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple, Set
+from typing import Dict, List, Optional, Set, Tuple
+
 import numpy as np
 
-
-@dataclass
-class MergePlan:
-    node_merges: List[Tuple[int, List[int]]]
-    element_removals: Set[int]
-    target_coords: dict
-    target_angles: dict
+MERGE_THRESHOLD_DEFAULT = 0.1
 
 
 @dataclass
@@ -21,20 +17,215 @@ class MergeResult:
     merged_pairs: List[Tuple[int, int]]
     removed_members: List[int]
     theta_updated: np.ndarray
+    theta_ids_updated: List[int]
     A_updated: np.ndarray
     geometry_updated: 'GeometryData'
     structure_modified: bool
 
 
 class NodeMerger:
-    def __init__(self, geometry, radius, constraint_calc):
+    """Utility to detect and merge near-duplicate nodes based on Euclidean distance."""
+
+    def __init__(self, geometry, constraint_calc, merge_threshold: float = MERGE_THRESHOLD_DEFAULT):
         self.geometry = geometry
-        self.radius = float(radius)
         self.constraint_calc = constraint_calc
+        self.merge_threshold = float(merge_threshold)
+
+    def find_merge_groups(
+        self,
+        theta_ids: List[int],
+        merge_threshold: Optional[float] = None,
+        active_areas: Optional[np.ndarray] = None,
+        removal_threshold: Optional[float] = None,
+    ) -> List[List[int]]:
+        """Identify node groups whose connecting members are shorter than the threshold."""
+        thr = float(merge_threshold) if merge_threshold is not None else self.merge_threshold
+        active_areas = None if active_areas is None else np.asarray(active_areas, dtype=float)
+        coords = np.asarray(getattr(self.geometry, 'nodes', []), dtype=float)
+        elements = getattr(self.geometry, 'elements', []) or []
+        if coords.size == 0 or len(elements) == 0:
+            return []
+
+        supports = set(self._get_support_nodes())
+        theta_id_set = set(int(nid) for nid in theta_ids)
+
+        def _edge_is_candidate(eid: int) -> bool:
+            # Length-only criterion; areas are ignored per user guidance.
+            return True
+
+        parent: Dict[int, int] = {}
+
+        def find(x: int) -> int:
+            parent.setdefault(x, x)
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for eid, (n1, n2) in enumerate(elements):
+            if not _edge_is_candidate(eid):
+                continue
+            if n1 == n2:
+                continue
+            p1 = coords[n1]
+            p2 = coords[n2]
+            length = float(np.hypot(p1[0] - p2[0], p1[1] - p2[1]))
+            if length < thr:
+                union(int(n1), int(n2))
+
+        clusters: Dict[int, Set[int]] = {}
+        for node in list(parent.keys()):
+            root = find(node)
+            clusters.setdefault(root, set()).add(node)
+
+        groups: List[List[int]] = []
+        for members in clusters.values():
+            if len(members) <= 1:
+                continue
+            members_sorted = sorted(members)
+            support_members = [nid for nid in members_sorted if nid in supports]
+            if support_members:
+                target = support_members[0]
+            else:
+                theta_members = [nid for nid in members_sorted if nid in theta_id_set]
+                target = theta_members[0] if theta_members else members_sorted[0]
+            rest = [nid for nid in members_sorted if nid != target]
+            if rest:
+                groups.append([target] + rest)
+        return groups
+
+    def merge_node_groups(
+        self,
+        theta: np.ndarray,
+        theta_ids: List[int],
+        areas: np.ndarray,
+        merge_groups: List[List[int]],
+    ) -> MergeResult:
+        """Execute node merging given pre-computed merge groups."""
+        if not merge_groups:
+            return MergeResult(
+                merged_pairs=[],
+                removed_members=[],
+                theta_updated=np.asarray(theta, dtype=float).copy(),
+                theta_ids_updated=list(theta_ids),
+                A_updated=np.asarray(areas, dtype=float).copy(),
+                geometry_updated=self.geometry,
+                structure_modified=False,
+            )
+
+        import copy
+
+        geometry = copy.deepcopy(self.geometry)
+        areas = np.asarray(areas, dtype=float) if areas is not None else np.zeros(len(self.geometry.elements), dtype=float)
+        coords_old = np.asarray(self.geometry.nodes, dtype=float)
+        support_nodes = set(self._get_support_nodes())
+
+        target_coords: Dict[int, np.ndarray] = {}
+        remove_nodes: Set[int] = set()
+        merged_pairs: List[Tuple[int, int]] = []
+        removed_members: List[int] = []
+
+        for group in merge_groups:
+            if len(group) < 2:
+                continue
+            target = int(group[0])
+            members = [int(nid) for nid in group[1:]]
+            remove_nodes.update(members)
+            merged_pairs.extend((target, member) for member in members)
+            removed_members.extend(members)
+
+            if target in support_nodes and 0 <= target < coords_old.shape[0]:
+                target_coords[target] = coords_old[target]
+                continue
+
+            pts = []
+            for nid in group:
+                if 0 <= nid < coords_old.shape[0]:
+                    pts.append(coords_old[nid])
+            if not pts:
+                continue
+            new_coord = np.mean(np.asarray(pts, dtype=float), axis=0)
+            target_coords[target] = new_coord
+
+        remove_nodes = set(remove_nodes)
+
+        old_to_new: Dict[int, int] = {}
+        new_nodes: List[List[float]] = []
+        for old_id, xy in enumerate(self.geometry.nodes):
+            if old_id in remove_nodes:
+                continue
+            new_xy = target_coords.get(old_id, np.asarray(xy, dtype=float))
+            old_to_new[old_id] = len(new_nodes)
+            new_nodes.append([float(new_xy[0]), float(new_xy[1])])
+
+        geometry.nodes = new_nodes
+        geometry.n_nodes = len(new_nodes)
+        geometry.n_dof = 2 * geometry.n_nodes
+
+        edge_map: Dict[Tuple[int, int], int] = {}
+        new_elements: List[List[int]] = []
+        new_areas: List[float] = []
+        for eid, (n1, n2) in enumerate(self.geometry.elements):
+            if n1 in remove_nodes or n2 in remove_nodes:
+                continue
+            nn1 = old_to_new.get(n1)
+            nn2 = old_to_new.get(n2)
+            if nn1 is None or nn2 is None or nn1 == nn2:
+                continue
+            key = (nn1, nn2) if nn1 < nn2 else (nn2, nn1)
+            area_val = float(areas[eid]) if eid < len(areas) else 0.0
+            if key in edge_map:
+                idx = edge_map[key]
+                new_areas[idx] += area_val
+            else:
+                edge_map[key] = len(new_elements)
+                new_elements.append([key[0], key[1]])
+                new_areas.append(area_val)
+
+        geometry.elements = new_elements
+        geometry.n_elements = len(new_elements)
+
+        self._remap_geometry_sets(geometry, old_to_new)
+
+        fixed_dofs, free_dofs = self.constraint_calc.setup_boundary_conditions(geometry)
+        geometry.fixed_dofs = fixed_dofs
+        geometry.free_dofs = free_dofs
+
+        theta_ids_new: List[int] = []
+        for nid in theta_ids:
+            mapped = old_to_new.get(int(nid))
+            if mapped is None:
+                continue
+            if mapped not in theta_ids_new:
+                theta_ids_new.append(mapped)
+
+        coords_new = np.asarray(geometry.nodes, dtype=float)
+        if theta_ids_new:
+            theta_vals = np.arctan2(coords_new[theta_ids_new, 1], coords_new[theta_ids_new, 0])
+            order = np.argsort(theta_vals)
+            theta_updated = theta_vals[order]
+            theta_ids_updated = [theta_ids_new[i] for i in order]
+        else:
+            theta_updated = np.asarray([], dtype=float)
+            theta_ids_updated = []
+
+        return MergeResult(
+            merged_pairs=merged_pairs,
+            removed_members=removed_members,
+            theta_updated=theta_updated,
+            theta_ids_updated=theta_ids_updated,
+            A_updated=np.asarray(new_areas, dtype=float),
+            geometry_updated=geometry,
+            structure_modified=len(merged_pairs) > 0,
+        )
 
     def _get_support_nodes(self) -> List[int]:
-        """Prefer inner ring endpoints by angle; fallback to outer/load nodes."""
         import numpy as _np
+
         try:
             explicit = getattr(self.geometry, 'support_nodes', None)
             if explicit:
@@ -56,262 +247,34 @@ class NodeMerger:
                 return [i_min, i_max] if i_min != i_max else [i_min]
         except Exception:
             pass
-        # final fallback
         n = int(getattr(self.geometry, 'n_nodes', 0))
-        return [0, n-1] if n >= 2 else []
+        return [0, n - 1] if n >= 2 else []
 
-    def group_nodes_by_radius(self, theta: np.ndarray, radius: float = None) -> List[List[int]]:
-        if radius is None:
-            radius = 0.5
-        # Determine optimized node ids from load_nodes (no layer semantics)
-        if hasattr(self.geometry, 'load_nodes') and self.geometry.load_nodes:
-            node_ids = list(self.geometry.load_nodes[:len(theta)])
-        else:
-            node_ids = list(range(min(len(theta), getattr(self.geometry, 'n_nodes', len(theta)))))
-
-        groups: List[List[int]] = []
-        used: Set[int] = set()
-
-        # Use current radius and theta to build positions along the ring for the selected nodes
-        coords = {}
-        for i, nid in enumerate(node_ids):
-            ang = float(theta[i]) if i < len(theta) else 0.0
-            coords[nid] = (self.radius * np.cos(ang), self.radius * np.sin(ang))
-
-        for i, nid_i in enumerate(node_ids):
-            if nid_i in used:
-                continue
-            xi, yi = coords[nid_i]
-            group = [nid_i]
-            for j, nid_j in enumerate(node_ids):
-                if i == j or nid_j in used:
-                    continue
-                xj, yj = coords[nid_j]
-                if np.hypot(xi - xj, yi - yj) < radius:
-                    group.append(nid_j)
-            if len(group) > 1:
-                groups.append(group)
-                used.update(group)
-        return groups
-
-    def merge_node_groups(self, theta: np.ndarray, A: np.ndarray, merge_groups: List[List[int]]) -> MergeResult:
-        if not merge_groups:
-            return self._create_no_change_result(theta, A)
-        plan = self._create_merge_plan(merge_groups, theta, A)
-        result = self._execute_merge_plan(plan, theta, A)
-        self._validate_merge_result(result)
-        return result
-
-    def _validate_merge_result(self, result: MergeResult) -> None:
-        """Lightweight sanity checks after merge to avoid downstream crashes.
-
-        Does not raise by default; prints warnings if inconsistencies are found.
-        """
-        try:
-            geom = result.geometry_updated
-            # Check node/element counts
-            if hasattr(geom, 'nodes') and hasattr(geom, 'n_nodes'):
-                if int(geom.n_nodes) != len(geom.nodes):
-                    print(f"[NodeMerger] Warning: n_nodes({geom.n_nodes}) != len(nodes)({len(geom.nodes)})")
-            if hasattr(geom, 'elements') and hasattr(geom, 'n_elements'):
-                if int(geom.n_elements) != len(geom.elements):
-                    print(f"[NodeMerger] Warning: n_elements({geom.n_elements}) != len(elements)({len(geom.elements)})")
-            # Check DOFs
-            if hasattr(geom, 'n_dof'):
-                fd = getattr(geom, 'fixed_dofs', []) or []
-                fr = getattr(geom, 'free_dofs', []) or []
-                if (len(fd) + len(fr)) != int(geom.n_dof):
-                    print(f"[NodeMerger] Warning: DOF mismatch fixed({len(fd)})+free({len(fr)}) != n_dof({geom.n_dof})")
-            # Check areas size aligns with new elements
-            if result.A_updated is not None and hasattr(geom, 'n_elements'):
-                if len(result.A_updated) != int(geom.n_elements):
-                    print(f"[NodeMerger] Warning: len(A_updated)({len(result.A_updated)}) != n_elements({geom.n_elements})")
-            # Theta size plausibility (aligned to optimized node set if available)
-            ln = getattr(geom, 'load_nodes', []) or []
-            if result.theta_updated is not None and ln:
-                if len(result.theta_updated) > len(ln):
-                    print(f"[NodeMerger] Warning: len(theta_updated)({len(result.theta_updated)}) > len(load_nodes)({len(ln)})")
-        except Exception as e:
-            print(f"[NodeMerger] Validation skipped due to error: {e}")
-
-    def _create_merge_plan(self, merge_groups, theta, A):
-        plan = MergePlan(node_merges=[], element_removals=set(), target_coords={}, target_angles={})
-        support_nodes = set(self._get_support_nodes())
-        # Determine optimized node ids list
-        if hasattr(self.geometry, 'load_nodes') and self.geometry.load_nodes:
-            node_ids = list(self.geometry.load_nodes[:len(theta)])
-        else:
-            node_ids = list(range(min(len(theta), getattr(self.geometry, 'n_nodes', len(theta)))))
-
-        for group in merge_groups:
-            # choose representative: if group contains support node, keep it; otherwise minimal id
-            target_node = None
-            for nid in group:
-                if nid in support_nodes:
-                    target_node = nid
-                    break
-            if target_node is None:
-                target_node = min(group)
-            merged_nodes = [n for n in group if n != target_node]
-            w_angle = self._compute_weighted_angle(group, node_ids, theta, A)
-            plan.node_merges.append((target_node, merged_nodes))
-            # If target is support, keep its original coordinate (do not move support)
-            if target_node in support_nodes and 0 <= target_node < len(self.geometry.nodes):
-                plan.target_angles[target_node] = None
-                plan.target_coords[target_node] = list(self.geometry.nodes[target_node])
-            else:
-                plan.target_angles[target_node] = w_angle
-                plan.target_coords[target_node] = [self.radius * np.cos(w_angle), self.radius * np.sin(w_angle)]
-            for m in merged_nodes:
-                for eid, (n1, n2) in enumerate(self.geometry.elements):
-                    if n1 == m or n2 == m:
-                        plan.element_removals.add(eid)
-        return plan
-
-    def _execute_merge_plan(self, plan: MergePlan, theta: np.ndarray, A: np.ndarray) -> MergeResult:
-        import copy
-        geometry = copy.deepcopy(self.geometry)
-
-        # 1) update target node coordinates
-        for nid, xy in plan.target_coords.items():
-            if 0 <= nid < len(geometry.nodes):
-                geometry.nodes[nid] = xy
-
-        # 2) build mapping old->new (remove merged nodes)
-        remove_set = set([m for _, ms in plan.node_merges for m in ms])
-        old_to_new = {}
-        new_nodes = []
-        for old_id, xy in enumerate(self.geometry.nodes):
-            if old_id in remove_set:
-                continue
-            old_to_new[old_id] = len(new_nodes)
-            new_nodes.append(xy)
-        geometry.nodes = new_nodes
-        geometry.n_nodes = len(new_nodes)
-        geometry.n_dof = 2 * geometry.n_nodes
-
-        # 3) rebuild elements and areas (merge parallels by summing areas)
-        edge_map = {}
-        new_elements = []
-        new_A = []
-        for eid, (n1, n2) in enumerate(self.geometry.elements):
-            if n1 in remove_set or n2 in remove_set:
-                continue
-            nn1 = old_to_new.get(n1, None)
-            nn2 = old_to_new.get(n2, None)
-            if nn1 is None or nn2 is None or nn1 == nn2:
-                continue
-            key = (nn1, nn2) if nn1 < nn2 else (nn2, nn1)
-            if key in edge_map:
-                idx = edge_map[key]
-                new_A[idx] += A[eid] if eid < len(A) else 0.0
-            else:
-                edge_map[key] = len(new_elements)
-                new_elements.append([key[0], key[1]])
-                new_A.append(A[eid] if eid < len(A) else 0.0)
-        geometry.elements = new_elements
-        geometry.n_elements = len(new_elements)
-
-        # 4) rebuild DOFs via constraint calculator
-        fixed_dofs, free_dofs = self.constraint_calc.setup_boundary_conditions(geometry)
-        geometry.fixed_dofs = fixed_dofs
-        geometry.free_dofs = free_dofs
-
-        # 4.1) propagate explicit support list if available
-        if hasattr(self.geometry, 'support_nodes'):
-            new_support = []
-            for nid in getattr(self.geometry, 'support_nodes', []):
-                if nid in old_to_new:
-                    mapped = old_to_new[nid]
-                    if mapped not in new_support:
-                        new_support.append(mapped)
-            geometry.support_nodes = new_support
-
-        # 5) remap theta (1D) for optimized nodes list
-        if hasattr(self.geometry, 'load_nodes') and self.geometry.load_nodes:
-            old_ids = list(self.geometry.load_nodes[:len(theta)])
-            # Remap geometry.load_nodes through old_to_new
-            new_load_nodes = []
-            for i in getattr(geometry, 'load_nodes', []):
-                if i in old_to_new:
-                    new_load_nodes.append(old_to_new[i])
-            geometry.load_nodes = new_load_nodes
-            new_ids = [i for i in new_load_nodes]
-        else:
-            old_ids = list(range(min(len(theta), self.geometry.n_nodes)))
-            new_ids = list(range(min(len(theta), geometry.n_nodes)))
-        theta_updated = self._remap_layer_theta(theta, old_ids, new_ids, plan, old_to_new)
-
-        return MergeResult(
-            merged_pairs=[(t, m) for t, ms in plan.node_merges for m in ms],
-            removed_members=sorted(list(plan.element_removals)),
-            theta_updated=theta_updated,
-            A_updated=np.array(new_A, dtype=float),
-            geometry_updated=geometry,
-            structure_modified=len(plan.node_merges) > 0,
-        )
-
-    def _remap_layer_theta(self, layer_theta: np.ndarray, old_ids: List[int], new_ids: List[int], plan: MergePlan, old_to_new: dict) -> np.ndarray:
-        if not old_ids or not new_ids:
-            return np.array([], dtype=float)
-
-        # representative mapping new_id -> weighted angle
-        rep_angles = {}
-        for target, merged in plan.node_merges:
-            group = [target] + merged
-            # compute weighted angle from old theta for nodes that were in optimized set
-            total = 0.0
-            accum = 0.0
-            for nid in group:
-                if nid in old_ids:
-                    idx = old_ids.index(nid)
-                    w = 1.0
-                    total += w
-                    accum += w * (layer_theta[idx] if idx < len(layer_theta) else 0.0)
-            if total > 0:
-                rep_angles[old_to_new[target]] = accum / total
-
-        theta_new = []
-        for nid in new_ids:
-            if nid in rep_angles:
-                theta_new.append(rep_angles[nid])
-            else:
-                # find corresponding old id if exists
-                candidates = [oid for oid, nn in old_to_new.items() if nn == nid]
-                angle_val = 0.0
-                for oid in candidates:
-                    if oid in old_ids:
-                        idx = old_ids.index(oid)
-                        if idx < len(layer_theta):
-                            angle_val = float(layer_theta[idx])
-                            break
-                theta_new.append(angle_val)
-        return np.array(theta_new, dtype=float)
-
-    def _compute_weighted_angle(self, group: List[int], optimized_ids: List[int], theta: np.ndarray, A: np.ndarray) -> float:
+    def _incident_area_weight(self, node_id: int, areas: np.ndarray) -> float:
         total = 0.0
-        accum = 0.0
-        for nid in group:
-            # weight by sum of incident areas
-            w = 0.0
-            for eid, (n1, n2) in enumerate(self.geometry.elements):
-                if n1 == nid or n2 == nid:
-                    w += (A[eid] if eid < len(A) else 0.0)
-            if w <= 0:
-                continue
-            if nid in optimized_ids:
-                idx = optimized_ids.index(nid)
-                if idx < len(theta):
-                    total += w
-                    accum += w * float(theta[idx])
-        return (accum / total) if total > 0 else 0.0
+        if areas is None:
+            return 0.0
+        for eid, (n1, n2) in enumerate(getattr(self.geometry, 'elements', []) or []):
+            if n1 == node_id or n2 == node_id:
+                if eid < len(areas):
+                    total += float(areas[eid])
+        return total
 
-    def _create_no_change_result(self, theta: np.ndarray, A: np.ndarray) -> MergeResult:
-        return MergeResult(
-            merged_pairs=[],
-            removed_members=[],
-            theta_updated=theta.copy(),
-            A_updated=A.copy(),
-            geometry_updated=self.geometry,
-            structure_modified=False,
-        )
+    def _remap_geometry_sets(self, geometry, mapping: Dict[int, int]) -> None:
+        def _remap(indices: Optional[List[int]]) -> List[int]:
+            if not indices:
+                return []
+            seen: Set[int] = set()
+            result: List[int] = []
+            for nid in indices:
+                mapped = mapping.get(int(nid))
+                if mapped is None or mapped in seen:
+                    continue
+                seen.add(mapped)
+                result.append(mapped)
+            return result
+
+        for attr in ('load_nodes', 'inner_nodes', 'outer_nodes', 'middle_nodes', 'support_nodes'):
+            if hasattr(geometry, attr):
+                setattr(geometry, attr, _remap(getattr(geometry, attr, [])))
+
