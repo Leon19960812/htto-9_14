@@ -198,6 +198,10 @@ class SequentialConvexTrussOptimizer:
         self.theta_move_caps = None
         self.symmetry_pairs = []
         self.symmetry_fixed_indices = []
+        self.node_mirror_map = {}
+        self.symmetry_member_pairs = []
+        self.symmetry_member_fixed = []
+        self.area_symmetry_active = False
         self.symmetry_active = False
 
     def _update_theta_move_caps(self, theta_len: int):
@@ -305,6 +309,10 @@ class SequentialConvexTrussOptimizer:
         self.symmetry_pairs = []
         self.symmetry_fixed_indices = []
         self.symmetry_active = False
+        self.node_mirror_map = {}
+        self.symmetry_member_pairs = []
+        self.symmetry_member_fixed = []
+        self.area_symmetry_active = False
         if not getattr(self, 'enable_symmetry', False):
             return
         pg = getattr(self, 'polar_geometry', None)
@@ -379,6 +387,24 @@ class SequentialConvexTrussOptimizer:
         self.symmetry_active = True
         print(f"对称约束已启用：{len(unique_pairs)} 组镜像节点，{len(unique_fixed)} 个节点固定在 pi/2。")
 
+        # 镜像节点映射与构件面积对称配对
+        try:
+            mirror_map = self._build_full_node_mirror_map(pg.nodes, angle_tol, center_tol, radius_precision)
+            member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
+        except Exception as area_err:
+            print(f"⚠️ 面积对称已停用：{area_err}")
+            self.node_mirror_map = {}
+            self.symmetry_member_pairs = []
+            self.symmetry_member_fixed = []
+            self.area_symmetry_active = False
+        else:
+            self.node_mirror_map = mirror_map
+            self.symmetry_member_pairs = member_pairs
+            self.symmetry_member_fixed = member_fixed
+            self.area_symmetry_active = bool(member_pairs)
+            if self.area_symmetry_active:
+                print(f"面积对称已启用：{len(member_pairs)} 对镜像构件。")
+
     def _check_node_set_symmetry(self, node_ids: List[int], nodes_by_id: dict, angle_tol: float, center_tol: float) -> bool:
         """判断给定节点集合在 θ 上是否关于 y 轴对称。"""
         angles: List[float] = []
@@ -399,6 +425,85 @@ class SequentialConvexTrussOptimizer:
             if abs(angles[left] - (np.pi / 2.0)) > center_tol:
                 return False
         return True
+
+    def _build_full_node_mirror_map(self, nodes: List['PolarNode'], angle_tol: float, center_tol: float,
+                                    radius_precision: int) -> dict:
+        """构建包含固定节点在内的镜像节点映射。"""
+        groups: dict = {}
+        for node in nodes:
+            key = (getattr(node, 'node_type', 'ring'), round(float(node.radius), radius_precision))
+            groups.setdefault(key, []).append(node)
+        mirror_map: dict = {}
+        for key, members in groups.items():
+            if not members:
+                continue
+            members_sorted = sorted(members, key=lambda nd: float(nd.theta))
+            left, right = 0, len(members_sorted) - 1
+            while left < right:
+                node_l = members_sorted[left]
+                node_r = members_sorted[right]
+                theta_l = float(node_l.theta)
+                theta_r = float(node_r.theta)
+                if abs((theta_l + theta_r) - np.pi) > angle_tol:
+                    raise ValueError(f"半径 {key[1]:.6f} 节点 {node_l.id}/{node_r.id} 未满足镜像角度要求")
+                mirror_map[int(node_l.id)] = int(node_r.id)
+                mirror_map[int(node_r.id)] = int(node_l.id)
+                left += 1
+                right -= 1
+            if left == right:
+                node_c = members_sorted[left]
+                if abs(float(node_c.theta) - (np.pi / 2.0)) > center_tol:
+                    raise ValueError(f"半径 {key[1]:.6f} 节点 {node_c.id} 未落在对称轴上")
+                mirror_map[int(node_c.id)] = int(node_c.id)
+        return mirror_map
+
+    def _build_member_symmetry_pairs(self, node_mirror_map: dict) -> Tuple[List[Tuple[int, int]], List[int]]:
+        """基于节点镜像映射构建面积变量的镜像配对。"""
+        elements = getattr(self.geometry, 'elements', []) or []
+        if not elements:
+            return [], []
+        key_to_indices: dict = {}
+        for idx, pair in enumerate(elements):
+            if not pair or len(pair) < 2:
+                continue
+            n1 = int(pair[0])
+            n2 = int(pair[1])
+            key = tuple(sorted((n1, n2)))
+            key_to_indices.setdefault(key, []).append(idx)
+        visited = set()
+        sym_pairs: List[Tuple[int, int]] = []
+        axis_elems: List[int] = []
+        for idx, pair in enumerate(elements):
+            if not pair or len(pair) < 2 or idx in visited:
+                continue
+            i1 = int(pair[0])
+            i2 = int(pair[1])
+            m1 = node_mirror_map.get(i1)
+            m2 = node_mirror_map.get(i2)
+            if m1 is None or m2 is None:
+                raise ValueError(f"构件 ({i1},{i2}) 缺少镜像节点映射")
+            key = tuple(sorted((i1, i2)))
+            mirror_key = tuple(sorted((m1, m2)))
+            candidates = key_to_indices.get(mirror_key, [])
+            partner = None
+            for cand in candidates:
+                if cand == idx or cand in visited:
+                    continue
+                partner = cand
+                break
+            if partner is None:
+                if mirror_key == key:
+                    axis_elems.append(idx)
+                    visited.add(idx)
+                    continue
+                raise ValueError(f"构件 ({i1},{i2}) 找不到镜像对应的构件")
+            pair_tuple = (idx, partner) if idx < partner else (partner, idx)
+            sym_pairs.append(pair_tuple)
+            visited.add(idx)
+            visited.add(partner)
+        sym_pairs = sorted(set(sym_pairs))
+        axis_elems = sorted(set(axis_elems))
+        return sym_pairs, axis_elems
 
     def _compute_member_forces_and_lengths(self, theta: np.ndarray, A: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """计算每根构件的轴力 N_i 与长度 L_i（约定受压为正）。"""

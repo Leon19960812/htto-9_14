@@ -81,34 +81,14 @@
 2. Alternatively, should `_check_node_set_symmetry` accept slightly unbalanced sets post-merge (e.g., tolerate missing pairs) but enforce symmetry on the remaining matched nodes?
 3. If constraint enforcement is desired even after imbalance, how should `symmetry_pairs` be recomputed to target whatever nodes still have a viable mirror counterpart while ignoring the rest?
 
-## TODO: Extend Symmetry to Member Areas
+## Area Symmetry Constraints (Implemented)
 
-### Current Situation
-- θ 变量的对称约束已经能够在合并之后保持几何镜像，但 `algorithm_modules.py` 中的面积变量只受上下界与总体体积约束约束，没有镜像绑定。
-- 结果是最终结构在几何上对称，但同一对镜像构件的 `A_i`、`A_j` 可能不同，视觉上线宽不匹配，同时左右半跨的刚度也会轻微偏斜。
+### Mechanism
+- `_prepare_symmetry_constraints` 现在在节点配对成功后额外构建 `node_mirror_map`，用以描述所有节点（含固定节点）的镜像关系。
+- 基于该映射扫描 `geometry.elements`，生成 `symmetry_member_pairs` 与 `symmetry_member_fixed`：前者用于镜像构件对，后者是位于对称轴上的自对称构件。
+- `SubproblemSolver` 读取 `symmetry_member_pairs`，对每一对构件施加 `A_i == A_j` 线性约束。镜像构件缺失时自动降级并打印“面积对称已停用”提示，不影响角度对称继续生效。
 
-### 可行性评估
-- 几何层的对称重新构建已经提供了节点对信息；通过扩展 `_prepare_symmetry_constraints` 可以同时返回“节点→镜像节点”的映射。
-- 以该映射即可在每次刷新后扫描 `self.geometry.elements`：若 `(n1, n2)` 的镜像端点 `(mirror(n1), mirror(n2))` 也构成有效构件，则记录为一组对称构件；若元素本身位于对称轴（端点互为镜像或节点位于轴上），则记为单独的“自对称”构件。
-- 上述映射逻辑与节点重建流程一致，节点融合后再次调用 `_prepare_symmetry_constraints` 时亦会更新，因而不会破坏现有的合并流程。
-- 需要注意的边界：
-  - 若某个构件在镜像一侧不存在（拓扑差异），应跳过该约束以免将问题判定为不可行；
-  - 轴上构件不需要额外约束，只需保留其面积自由度。
-
-### 预计修改步骤
-1. **扩展 `_prepare_symmetry_constraints`**：
-   - 生成并缓存 `self.node_mirror_map`，键为节点 id，值为镜像节点 id；轴线上节点映射到自身。
-   - 基于此映射构建 `self.symmetry_member_pairs`（面积成对索引）及 `self.symmetry_member_fixed`（轴上构件索引）。
-2. **在 `SubproblemSolver` 中施加面积约束**：
-   - 读取 `self.opt.symmetry_member_pairs`，对每对 `(i, j)` 添加线性等式 `A[i] == A[j]`。
-   - 对 `self.opt.symmetry_member_fixed` 可选择不额外约束（原约束已足够），仅记录便于调试。
-3. **节点融合后刷新**：
-   - 维持现有流程：合并完成 → `rebuild_from_geometry` → `_prepare_symmetry_constraints`，新字段会自动更新。
-   - 如遇镜像集合不完整（例如构件数量不匹配），在 `_prepare_symmetry_constraints` 内打印诊断并禁用面积对称，以免破坏主流程的鲁棒性。
-4. **验证流程**：
-   - 在接受步长后输出面积对称对数目，用于观察约束是否生效。
-   - 执行一次回归运行，检查最终 `area_history` 中镜像构件是否相等，以及结构图线宽是否对称。
-
-### 后续风险 / 需要决策的点
-- 若今后引入非对称载荷或支撑，需要允许“只锁角度，不锁面积”的运行模式；建议通过 CLI 参数控制新约束是否启用。
-- 需要确认镜像构件列表在所有阶段都存在 1:1 配对，否则需提供自动降级逻辑（例如略去无法配对的构件）。
+### Notes & Open Items
+- 轴上的自对称构件仍保持单独自由度；若未来需要，也可将其面积与相邻构件联动。
+- 降级逻辑当前是“缺少镜像 → 全局禁用面积对称”，后续可考虑仅剔除缺对构件，以便最大化保持镜像约束覆盖面。
+- 如需支持非对称工况，应通过 CLI 参数或配置允许关闭面积约束，以免影响求解可行性。

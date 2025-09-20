@@ -516,12 +516,18 @@ class SubproblemSolver:
                         constraints.append(theta[idx] == float(np.pi / 2.0))
 
         # Area constraints
+        area_sym_active = bool(getattr(self.opt, 'area_symmetry_active', False))
         if m > 0:
             constraints += [A >= A_min, A <= A_max]
             constraints.append(lengths @ A <= V_max)
             A_req = getattr(self.opt, 'A_req_buckling', None)
             if A_req is not None and len(A_req) == m:
                 constraints.append(A >= np.asarray(A_req, dtype=float))
+            if area_sym_active:
+                member_pairs = getattr(self.opt, 'symmetry_member_pairs', []) or []
+                for (i_idx, j_idx) in member_pairs:
+                    if i_idx < m and j_idx < m:
+                        constraints.append(A[i_idx] == A[j_idx])
 
         # Build K_lin_ff and f_lin_ff affine expressions
         # K_lin_ff(theta, A) = sum_i A_i Ki_ff + sum_j (theta_j-θ_kj) Ktheta_ff[j]
@@ -573,11 +579,24 @@ class SubproblemSolver:
             prob = cp.Problem(objective, constraints)
 
         # Solve
+        def _disable_area_symmetry_once() -> None:
+            self.opt.area_symmetry_active = False
+            self.opt.symmetry_member_pairs = []
+            self.opt.symmetry_member_fixed = []
+
         try:
             prob.solve(solver=cp.MOSEK, verbose=False)
         except Exception as e:
+            if area_sym_active:
+                print(f"⚠️ 面积对称求解失败，已暂时禁用面积等式：{e}")
+                _disable_area_symmetry_once()
+                return self.solve_linearized_subproblem(A_k, theta_k)
             raise RuntimeError(f"MOSEK solve failed for SDP subproblem: {e}") from e
         if prob.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+            if area_sym_active:
+                print(f"⚠️ 面积对称导致求解状态 {prob.status}，自动禁用后重试。")
+                _disable_area_symmetry_once()
+                return self.solve_linearized_subproblem(A_k, theta_k)
             raise RuntimeError(f"Subproblem not solved to optimality with MOSEK: status={prob.status}")
 
         theta_new = np.asarray(theta.value, dtype=float) if n > 0 else theta_k.copy()
