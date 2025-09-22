@@ -38,7 +38,7 @@ class SequentialConvexTrussOptimizer:
                  simple_loads: bool = False,
                  enforce_symmetry: bool = False):
         """初始化优化器"""
-        print("初始化SCP...")
+        print("Initializing SCP...")
         
         # 保存参数
         self.radius = radius
@@ -76,13 +76,13 @@ class SequentialConvexTrussOptimizer:
         # 6. 创建算法组件
         self._create_algorithm_modules()
         
-        print("✅ 序列凸优化器初始化完成")
+        print(" SCP initialized.")
         
         # 严格模式：出现异常不做兜底回退，直接抛错终止
         self.strict_mode = True
         # 节点融合开关（默认禁用；逐步打通后可启用）
         self.enable_node_merge = True
-        self.node_merge_threshold = 0.025
+        self.node_merge_threshold = 0.1
 
     # -------------------------------------------------------------
     # Utility: run a single SDP subproblem for diagnostics/benchmark
@@ -317,25 +317,25 @@ class SequentialConvexTrussOptimizer:
             return
         pg = getattr(self, 'polar_geometry', None)
         if pg is None or not getattr(pg, 'nodes', None):
-            print('对称约束已跳过：PolarGeometry 不可用。')
+            print('Symmetry constraints skipped: PolarGeometry unavailable.')
             self.enable_symmetry = False
             return
         nodes_by_id = {int(node.id): node for node in pg.nodes}
         free_ids = [int(nid) for nid in theta_ids]
         if not free_ids:
-            print('对称约束已跳过：无自由节点。')
+            print('Symmetry constraints skipped: no free nodes.')
             self.enable_symmetry = False
             return
         angle_tol = 1e-5
         center_tol = 1e-5
         radius_precision = 6
         node_sets = [
-            ('载荷', [int(i) for i in getattr(self.geometry, 'load_nodes', []) or []]),
-            ('支撑', [int(i) for i in getattr(self.geometry, 'support_nodes', []) or []]),
+            ('Loads', [int(i) for i in getattr(self.geometry, 'load_nodes', []) or []]),
+            ('Supoorts', [int(i) for i in getattr(self.geometry, 'support_nodes', []) or []]),
         ]
         for label, ids in node_sets:
             if ids and not self._check_node_set_symmetry(ids, nodes_by_id, angle_tol, center_tol):
-                print(f'{label}节点不满足镜像，对称约束已停用。')
+                print(f'{label} node fails mirror symmetry; disabling symmetry constraints.')
                 self.enable_symmetry = False
                 return
         groups: dict = {}
@@ -346,7 +346,7 @@ class SequentialConvexTrussOptimizer:
             key = (getattr(node, 'node_type', 'ring'), round(float(node.radius), radius_precision))
             groups.setdefault(key, []).append((idx_theta, float(node.theta)))
         if not groups:
-            print('对称约束已跳过：无可配对节点。')
+            print('Symmetry constraints skipped: no pairable nodes.')
             self.enable_symmetry = False
             return
         pair_list = []
@@ -365,7 +365,7 @@ class SequentialConvexTrussOptimizer:
                     left += 1
                     right -= 1
                 else:
-                    print(f"对称约束已停用：半径 {key[1]:.6f} 存在不成镜像的节点对 (θ={theta_l:.6f}, θ={theta_r:.6f})。")
+                    print(f"Symmetry constraints disabled: radius {key[1]:.6f} has a non-mirroring node pair (θ={theta_l:.6f}, θ={theta_r:.6f}).")
                     self.enable_symmetry = False
                     return
             if left == right:
@@ -373,11 +373,11 @@ class SequentialConvexTrussOptimizer:
                 if abs(theta_c - (np.pi / 2.0)) <= center_tol:
                     fixed_indices.append(idx_c)
                 else:
-                    print(f"对称约束已停用：半径 {key[1]:.6f} 存在未匹配的节点 (θ={theta_c:.6f})。")
+                    print(f"Symmetry constraints disabled: radius {key[1]:.6f} has an unmatched node (θ={theta_c:.6f}).")
                     self.enable_symmetry = False
                     return
         if not pair_list and not fixed_indices:
-            print('对称约束已跳过：无可匹配的自由节点。')
+            print('Symmetry constraints skipped: no matchable free nodes.')
             self.enable_symmetry = False
             return
         unique_pairs = sorted(set(pair_list))
@@ -385,14 +385,14 @@ class SequentialConvexTrussOptimizer:
         self.symmetry_pairs = unique_pairs
         self.symmetry_fixed_indices = unique_fixed
         self.symmetry_active = True
-        print(f"对称约束已启用：{len(unique_pairs)} 组镜像节点，{len(unique_fixed)} 个节点固定在 pi/2。")
+        print(f"Symmetry constraints enabled: {len(unique_pairs)} mirror pairs; {len(unique_fixed)} nodes fixed at pi/2.")
 
         # 镜像节点映射与构件面积对称配对
         try:
             mirror_map = self._build_full_node_mirror_map(pg.nodes, angle_tol, center_tol, radius_precision)
             member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
         except Exception as area_err:
-            print(f"⚠️ 面积对称已停用：{area_err}")
+            print(f" Area symmetry disabled: {area_err}")
             self.node_mirror_map = {}
             self.symmetry_member_pairs = []
             self.symmetry_member_fixed = []
@@ -403,7 +403,7 @@ class SequentialConvexTrussOptimizer:
             self.symmetry_member_fixed = member_fixed
             self.area_symmetry_active = bool(member_pairs)
             if self.area_symmetry_active:
-                print(f"面积对称已启用：{len(member_pairs)} 对镜像构件。")
+                print(f"Area symmetry enabled: {len(member_pairs)} mirror member pairs.")
 
     def _check_node_set_symmetry(self, node_ids: List[int], nodes_by_id: dict, angle_tol: float, center_tol: float) -> bool:
         """判断给定节点集合在 θ 上是否关于 y 轴对称。"""
@@ -496,7 +496,7 @@ class SequentialConvexTrussOptimizer:
                     axis_elems.append(idx)
                     visited.add(idx)
                     continue
-                raise ValueError(f"构件 ({i1},{i2}) 找不到镜像对应的构件")
+                raise ValueError(f"Element ({i1},{i2}) can't find mirror member")
             pair_tuple = (idx, partner) if idx < partner else (partner, idx)
             sym_pairs.append(pair_tuple)
             visited.add(idx)
@@ -593,7 +593,7 @@ class SequentialConvexTrussOptimizer:
         print("=" * 80)
         
         # 1. 初始化
-        print("初始化优化...")
+        print("Initializing optimization...")
         theta_k, A_k = self._initialize_optimization_variables()
         
         # 计算初始柔度
@@ -606,35 +606,35 @@ class SequentialConvexTrussOptimizer:
         # 初始化接受历史（第0次）
         self.compliance_history = [self.current_compliance]
         
-        print(f"初始设置:")
-        print(f"  节点数: {len(theta_k)}")
-        print(f"  单元数: {self.n_elements}")
-        print(f"  初始柔度: {self.current_compliance:.6e}")
-        print(f"  信赖域半径: {self.trust_radius:.4f}")
+        print(f"Initial settings:")
+        print(f"  Nodes: {len(theta_k)}")
+        print(f"  Elements: {self.n_elements}")
+        print(f"  Initial compliance: {self.current_compliance:.6e}")
+        print(f"  Trust-region radius: {self.trust_radius:.4f}")
         
         # 2. 主优化循环
         success_count = 0
         for self.iteration_count in range(self.optimization_params.max_iterations):
             print(f"\n{'='*60}")
-            print(f"迭代 {self.iteration_count + 1}/{self.optimization_params.max_iterations}")
+            print(f"Iteration {self.iteration_count + 1}/{self.optimization_params.max_iterations}")
             print(f"{'='*60}")
             
             try:
                 # 求解子问题
-                print("求解联合线性化子问题...")
+                print("Solving joint linearized subproblem...")
                 # 更新逐点步长帽（与 theta 顺序对齐）
                 try:
                     self._update_theta_move_caps(len(theta_k))
                 except Exception as _e:
-                    print(f"  ⚠️ 更新逐点步长帽失败: {_e}")
+                    print(f"  ⚠️ Failed to update pointwise step caps: {_e}")
                 # 仅在相位 C 构造并记录 AASI 下界；A/B 阶段不生成（避免误解为约束已启用）
                 if self.phase == 'C':
                     try:
                         self.A_req_buckling = self._build_aasi_buckling_lower_bounds(theta_k, A_k, eps=1e-3, a_cr_min_ratio=0.002)
                         n_active = int(np.sum(self.A_req_buckling > self.A_min + 1e-16))
-                        print(f"已生成 AASI 屈曲下界（C阶段），激活构件数: {n_active}/{len(self.A_req_buckling)}")
+                        print(f"Generated AASI buckling lower bounds (phase C); active members: {n_active}/{len(self.A_req_buckling)}")
                     except Exception as _e:
-                        print(f"⚠️ AASI 下界生成失败: {_e}")
+                        print(f"⚠️ Failed to generate AASI lower bounds: {_e}")
                         self.A_req_buckling = None
                 else:
                     self.A_req_buckling = None
@@ -642,7 +642,7 @@ class SequentialConvexTrussOptimizer:
                 result = self.subproblem_solver.solve_linearized_subproblem(A_k, theta_k)
                 
                 if result is None:
-                    print("❌ 子问题求解失败")
+                    print("❌ Subproblem solve failed")
                     if getattr(self, 'strict_mode', False):
                         raise RuntimeError("Linearized subproblem failed")
                     else:
@@ -670,11 +670,11 @@ class SequentialConvexTrussOptimizer:
                         raise ValueError(f"梯度类型错误：grad_theta={type(grad_theta)}, grad_A={type(grad_A)}")
                     
                     self._cached_gradients = (grad_theta, grad_A)
-                    print(f"✅ 梯度缓存成功")
+                    print(f"  Gradient cache refreshed")
                     
                 except Exception as e:
-                    print(f"❌ 梯度缓存失败: {e}")
-                    print(f"   梯度计算失败，将使用有限差分方法")
+                    print(f"  Gradient cache failed: {e}")
+                    print(f"   Gradient evaluation failed; falling back to finite differences")
                     self._cached_gradients = None
                 
                 # 线搜索 + 刚度正定守护：沿(Δθ,ΔA)回溯 alpha，确保 K_ff 可Cholesky 且条件数合理
@@ -714,8 +714,8 @@ class SequentialConvexTrussOptimizer:
                 # 输出线搜索与步长信息（无论是否回溯）
                 tried_str = " → ".join([f"{a:.3f}" for a, _, _ in trial_record])
                 cond_str = f"{chosen_cond:.3e}" if chosen_cond is not None else "nan"
-                print(f"  Line search (SPD guard): α_final={alpha:.3f} | tried: {tried_str} | cond(K_ff)≈{cond_str}")
-                print(f"  Step norms: ||Δθ||2={base_dtheta_norm:.3e}, ||ΔA||2={base_dA_norm:.3e}")
+                print(f"  Line search (SPD guard): alpha_final={alpha:.3f} | tried: {tried_str} | cond(K_ff)~={cond_str}")
+                print(f"  Step norms: ||theta change||2={base_dtheta_norm:.3e}, ||A change||2={base_dA_norm:.3e}")
                 # 记录 SPD 阶段结果，供日志使用
                 alpha_spd_final = float(alpha)
                 spd_trials = trial_record.copy()
@@ -747,7 +747,7 @@ class SequentialConvexTrussOptimizer:
                             predicted_from_model=(predicted_t if (predicted_t is not None and abs(alpha_quality-1.0) < 1e-12) else None)
                         )
                     except Exception as e:
-                        print(f"  ❌ 步长质量评估失败(α={alpha_quality:.3f}): {e}")
+                        print(f"  ❌ Step-quality evaluation failed (α={alpha_quality:.3f}): {e}")
                         # 若评估失败，视为质量很差，继续回溯
                         rho_try = -np.inf
                     quality_trials.append((alpha_quality, rho_try))
@@ -764,10 +764,10 @@ class SequentialConvexTrussOptimizer:
                     A_new = A_k + alpha_quality * dA
 
                 # 打印质量回溯记录
-                trials_str = " | ".join([f"α={a:.3f}, ρ={r:.3f}" if np.isfinite(r) else f"α={a:.3f}, ρ=nan" for a, r in quality_trials])
-                print(f"  Quality backtracking: {trials_str}")
+                trials_str = " | ".join([f"α={a:.3f}, ρ={r:.3f}" if np.isfinite(r) else f"alpha={a:.3f}, rho=nan" for a, r in quality_trials])
+                print(f"Quality backtracking: {trials_str}")
                 if abs(alpha_quality - alpha) > 1e-12:
-                    print(f"  α adjusted by ρ: {alpha:.3f} → {alpha_quality:.3f}")
+                    print(f"  alpha adjusted by rho: {alpha:.3f} → {alpha_quality:.3f}")
 
                 # 保存最终α
                 alpha = float(alpha_quality)
@@ -812,9 +812,9 @@ class SequentialConvexTrussOptimizer:
                     if self.convergence_checker.check_convergence(theta_k, theta_new, A_k, A_new):
                         if getattr(self, 'enable_aasi', False):
                             if self._aasi_stability_ok(theta_new, A_new):
-                                print(f"\n🎉 算法收敛（含AASI稳定性）")
+                                print(f"\n🎉 Algorithm converged (including AASI stability)")
                         else:
-                            print(f"\n🎉 算法收敛")
+                            print(f"\n🎉 Algorithm converged")
                         break
                     theta_k = theta_new
                     A_k = A_new
@@ -825,9 +825,9 @@ class SequentialConvexTrussOptimizer:
                     improvement = (old_compliance - self.current_compliance) / old_compliance * 100
                     success_count += 1
                     
-                    print(f"✅ 接受步长 (第{success_count}次成功)")
-                    print(f"   柔度: {old_compliance:.6e} → {self.current_compliance:.6e}")
-                    print(f"   改进: {improvement:.2f}%")
+                    print(f"   Accepted step (success #{success_count})")
+                    print(f"   Compliance: {old_compliance:.6e} → {self.current_compliance:.6e}")
+                    print(f"   Improvement: {improvement:.2f}%")
                     # —— 写入日志（接受步） ——
                     try:
                         sd = self.step_details[-1] if hasattr(self, 'step_details') and self.step_details else {}
@@ -879,14 +879,14 @@ class SequentialConvexTrussOptimizer:
                         avg_impr = sum(y for _,y in win) / len(win)
                         if self.phase == 'A' and removed_sum <= 3 and avg_impr < 0.5:
                             self.phase = 'B'
-                            print("[Phase Switch] A → B（拓扑基本定型，开始几何细化）")
+                            print("[Phase Switch] A → B (topology mostly settled; begin geometric refinement)")
                         if self.phase in ('A','B') and avg_impr < 0.3:
                             if self.enable_aasi:
                                 self.phase = 'C'
-                                print("[Phase Switch] 进入 C（启用稳定性约束 AASI）")
+                                print("[Phase Switch] Entering C (activate AASI stability constraints)")
                             else:
                                 # 禁用 AASI 时不进入 C，相当于仅进行 A/B 阶段的对照实验
-                                print("[Phase Switch] AASI 已禁用，跳过进入 C 阶段")
+                                print("[Phase Switch] AASI disabled; skipping phase C")
 
                     # 同步几何到最新 theta，用于后续融合与导出
                     try:
@@ -981,12 +981,12 @@ class SequentialConvexTrussOptimizer:
                                 if hasattr(self, 'polar_geometry') and self.polar_geometry is not None:
                                     self.polar_geometry.rebuild_from_geometry(self.geometry)
                             except Exception as _e:
-                                print(f"   ⚠️ 同步 PolarGeometry 失败: {_e}")
+                                print(f"    Failed to sync PolarGeometry: {_e}")
                             if symmetry_refresh_needed:
                                 try:
                                     self._prepare_symmetry_constraints(self.theta_node_ids)
                                 except Exception as sym_err:
-                                    print(f"   ⚠️ 重新构建对称约束失败: {sym_err}")
+                                    print(f"    Failed to rebuild symmetry constraints: {sym_err}")
                             # 重新计算逐点步长帽
                             try:
                                 self._update_theta_move_caps(len(theta_k))
@@ -995,15 +995,15 @@ class SequentialConvexTrussOptimizer:
                             # 合并后基线柔度与新几何保持一致，防止后续步长质量评估失配
                             try:
                                 self.current_compliance = self.system_calculator.compute_actual_compliance(theta_k, A_k)
-                                print(f"   合并后重新评估柔度: {self.current_compliance:.6e}")
+                                print(f"   Re-evaluated compliance after merge: {self.current_compliance:.6e}")
                             except Exception as _e:
-                                print(f"   ⚠️ 合并后柔度重评失败: {_e}")
+                                print(f"    Failed to recompute compliance after merge: {_e}")
                             
-                            print(f"   重新计算预计算刚度矩阵，共 {len(self.unit_stiffness_matrices)} 个单元")                        
+                            print(f"   Recomputed cached stiffness matrices; {len(self.unit_stiffness_matrices)} elements total")                        
                     
                 else:
-                    print("❌ 拒绝步长")
-                    print(f"   保持当前解，柔度: {self.current_compliance:.6e}")
+                    print("❌ Rejected step")
+                    print(f"   Keeping current solution; compliance: {self.current_compliance:.6e}")
                     # 回写拒绝标记到最后一个 step_detail
                     if hasattr(self, 'step_details') and self.step_details:
                         self.step_details[-1]['accepted'] = False
@@ -1036,10 +1036,10 @@ class SequentialConvexTrussOptimizer:
                 
                     
             except KeyboardInterrupt:
-                print("\n⚠️  用户中断优化")
+                print("\n Optimization interrupted by user")
                 break
             except Exception as e:
-                print(f"❌ 迭代 {self.iteration_count + 1} 失败: {e}")
+                print(f"❌ Iteration {self.iteration_count + 1} failed: {e}")
                 if getattr(self, 'strict_mode', False):
                     raise
                 else:
@@ -1048,7 +1048,7 @@ class SequentialConvexTrussOptimizer:
                     else:
                         break
         
-        # 3. 优化完成
+        # 3. Optimization complete
         self._print_optimization_summary(success_count)
         
         # 设置最终结果属性
@@ -1059,7 +1059,7 @@ class SequentialConvexTrussOptimizer:
     def _handle_subproblem_failure(self) -> bool:
         """处理子问题求解失败"""
         if self.trust_radius <= 1.1 * self.trust_region_params.min_radius:
-            print("信赖域半径过小，停止优化")
+            print("Trust-region radius too small; stopping optimization")
             return False
         else:
             old_radius = self.trust_radius
@@ -1076,7 +1076,7 @@ class SequentialConvexTrussOptimizer:
                 'rho': 0.0  # 失败时rho为0
             })
             
-            print(f"缩小信赖域至 {self.trust_radius:.4f}，重试")
+            print(f"Shrinking trust region to {self.trust_radius:.4f}; retrying")
             return True
     
     def _handle_iteration_failure(self) -> bool:
@@ -1096,7 +1096,7 @@ class SequentialConvexTrussOptimizer:
         })
         
         if self.trust_radius <= 1.1 * self.trust_region_params.min_radius:
-            print("信赖域过小，停止优化")
+            print("Trust region too small; stopping optimization")
             return False
         return True
     
@@ -1105,19 +1105,19 @@ class SequentialConvexTrussOptimizer:
         """打印迭代信息"""
         theta_change = np.linalg.norm(theta_new - theta_k)
         A_change = np.linalg.norm(A_new - A_k)
-        print(f"  变化情况:")
-        print(f"    θ变化: {theta_change:.6e} (最大变化: {np.max(np.abs(theta_new - theta_k)):.6e})")
-        print(f"    A变化: {A_change:.6e} (最大变化: {np.max(np.abs(A_new - A_k)):.6e})")
+        print(f"  Changes:")
+        print(f"    theta change: {theta_change:.6e} (max change: {np.max(np.abs(theta_new - theta_k)):.6e})")
+        print(f"    A change: {A_change:.6e} (max change: {np.max(np.abs(A_new - A_k)):.6e})")
     
     def _print_optimization_summary(self, success_count: int):
         """打印优化总结"""
         print(f"\n{'='*80}")
-        print("优化完成")
+        print("Optimization complete")
         print(f"{'='*80}")
-        print(f"总迭代次数: {self.iteration_count + 1}")
-        print(f"成功步长: {success_count}")
-        print(f"最终柔度: {self.current_compliance:.6e}")
-        print(f"最终信赖域半径: {self.trust_radius:.6f}")
+        print(f"Total iterations: {self.iteration_count + 1}")
+        print(f"Successful steps: {success_count}")
+        print(f"Final compliance: {self.current_compliance:.6e}")
+        print(f"Final trust-region radius: {self.trust_radius:.6f}")
         
         # 保存最终结果
         self.initializer.final_angles = self.current_angles
@@ -1169,7 +1169,7 @@ class SequentialConvexTrussOptimizer:
             with open(tmp_json, "w", encoding="utf-8") as f:
                 json.dump(safe_steps, f, ensure_ascii=False, indent=2)
             os.replace(tmp_json, json_path)
-            print(f"已导出: {json_path}")
+            print(f"export: {json_path}")
 
             # CSV 精简导出（每步关键信息）
             csv_path = os.path.join(export_dir, "step_details_summary.csv")
@@ -1188,9 +1188,9 @@ class SequentialConvexTrussOptimizer:
                     row = {k: step.get(k, None) for k in fields}
                     writer.writerow(row)
             os.replace(tmp_csv, csv_path)
-            print(f"已导出: {csv_path}")
+            print(f"export: {csv_path}")
         except Exception as e:
-            print(f"导出 step_details 失败: {e}")
+            print(f"export step_details fail: {e}")
     
     def _set_final_results(self):
         """设置最终结果属性，用于可视化"""
@@ -1269,7 +1269,7 @@ class SequentialConvexTrussOptimizer:
             if hasattr(self.gradient_calculator, '_cached_gradients'):
                 self.gradient_calculator._cached_gradients = None
         
-        print("   清除线性化缓存，强制重线性化")
+        print("Cleared linearization cache; next iteration will re-linearize.")
     
     def _reinitialize_load_calculator(self):
         """重新初始化载荷计算器（节点融合后需要更新Shell FEA网格）"""
@@ -1290,9 +1290,9 @@ class SequentialConvexTrussOptimizer:
                 shell_params=shell_params,
                 simple_mode=simple_mode,
             )
-            print("   重新初始化载荷计算器（Shell FEA网格已更新）")
+            print(" reinitialized load calculator with shell FEA.")
         except Exception as e:
-            print(f"   ⚠️  载荷计算器重新初始化失败: {e}")
+            print(f"reinitialization failed: {e}")
             # 如果重新初始化失败，继续使用原来的计算器
 
     def _record_iteration_state(self, iteration: int, theta_vec: np.ndarray, area_vec: np.ndarray) -> None:
@@ -1409,7 +1409,7 @@ class SequentialConvexTrussOptimizer:
                     for iteration, element_id, area_val in area_records:
                         writer.writerow([iteration, element_id, area_val])
         except Exception as exp:
-            print(f"⚠️ 导出 theta/area 历史失败: {exp}")
+            print(f"export theta and area history failed: {exp}")
 
     def _append_iteration_log(self, row: dict, filepath: str = 'optimization_log.csv'):
         """将关键迭代参数追加写入CSV日志。
@@ -1436,7 +1436,7 @@ class SequentialConvexTrussOptimizer:
                 safe_row = {k: row.get(k, '') for k in headers}
                 writer.writerow(safe_row)
         except Exception as e:
-            print(f"   ⚠️ 写入日志失败: {e}")
+            print(f"failed to write log : {e}")
 
     def verify_solution(self, areas: np.ndarray, theta: np.ndarray):
         """验证解的正确性（用最终theta和A重新生成结构参数）"""

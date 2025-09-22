@@ -21,7 +21,7 @@ class TrustRegionParams:
     """Trust region configuration."""
 
     initial_radius: float = np.pi / 180.0
-    max_radius: float = np.deg2rad(5.0)
+    max_radius: float = np.deg2rad(2.0)
     min_radius: float = np.pi / 720.0
 
     shrink_factor: float = 0.5
@@ -35,8 +35,8 @@ class GeometryParams:
     """Geometric constraints configuration."""
 
     min_angle_spacing: float = np.pi / 180.0
-    boundary_buffer: float = np.pi / 180.0
-    neighbor_move_cap: float = np.deg2rad(5.0)
+    boundary_buffer: float = np.pi / 360.0
+    neighbor_move_cap: float = np.deg2rad(2.0)
     neighbor_move_eps: float = 1e-3
 
 
@@ -588,13 +588,13 @@ class SubproblemSolver:
             prob.solve(solver=cp.MOSEK, verbose=False)
         except Exception as e:
             if area_sym_active:
-                print(f"⚠️ 面积对称求解失败，已暂时禁用面积等式：{e}")
+                print(f"⚠️ Area symmetry solve failed; temporarily disabling area equality: {e}")
                 _disable_area_symmetry_once()
                 return self.solve_linearized_subproblem(A_k, theta_k)
             raise RuntimeError(f"MOSEK solve failed for SDP subproblem: {e}") from e
         if prob.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
             if area_sym_active:
-                print(f"⚠️ 面积对称导致求解状态 {prob.status}，自动禁用后重试。")
+                print(f"⚠️ Area symmetry led to solver status {prob.status}; disabling and retrying automatically.")
                 _disable_area_symmetry_once()
                 return self.solve_linearized_subproblem(A_k, theta_k)
             raise RuntimeError(f"Subproblem not solved to optimality with MOSEK: status={prob.status}")

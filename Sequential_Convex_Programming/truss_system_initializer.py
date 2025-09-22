@@ -248,7 +248,7 @@ class TrussSystemInitializer:
             rho_steel=7850.0,
             rho_water=1025.0,
             g=9.81,
-            A_min=1e-5,
+            A_min=1e-6,
             A_max=1e-2,
             removal_threshold=1e-4,
         )

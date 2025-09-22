@@ -687,7 +687,7 @@ Verification:
                 if val is not None and np.isfinite(val):
                     comp_values.append(float(val))
         if not comp_values:
-            print('✗ 无柔度历史数据可用于绘制。')
+            print('No compliance data to plot!')
             return None
 
         iterations = np.arange(len(comp_values))
@@ -723,7 +723,7 @@ Verification:
         if save_path:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             fig.savefig(save_path, dpi=dpi, bbox_inches='tight')
-            print(f"✓ 柔度演化图已保存至: {save_path}")
+            print(f"Compliance history saved to: {save_path}")
 
         if show_plot:
             plt.show(block=True)
@@ -785,7 +785,7 @@ Verification:
             
             # 标注关键事件
             if hasattr(optimizer, 'trust_radius_changes') and optimizer.trust_radius_changes:
-                print(f"发现 {len(optimizer.trust_radius_changes)} 个信赖域变化事件")
+                print(f"discover {len(optimizer.trust_radius_changes)} trust region changes:")
                 
                 for i, change in enumerate(optimizer.trust_radius_changes):
                     iteration = change['iteration']
@@ -826,7 +826,7 @@ Verification:
                                arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2',
                                              color='black', lw=1.5))
                     
-                    print(f"  事件 {i+1}: {event_name} at iteration {iteration}, "
+                    print(f"  events {i+1}: {event_name} at iteration {iteration}, "
                           f"ρ={rho:.3f}, {old_radius:.4f} → {new_radius:.4f}")
             
             # 设置图形属性
@@ -892,11 +892,11 @@ Verification:
                 print("显示信赖域演化图...")
                 plt.show(block=True)
             
-            print("✓ 信赖域演化图生成完成！")
+            print("TR evolution plot generation completed.")
             return fig, ax
             
         except Exception as e:
-            print(f"✗ 信赖域演化图生成失败: {e}")
+            print(f"TR evolution plot failed: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -1287,7 +1287,7 @@ Verification:
             else:
                 plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
             
-            print(f"✅ 步长质量分析图已保存至: {save_path}")
+            print(f" 步长质量分析图已保存至: {save_path}")
         
         plt.show()
         return fig
