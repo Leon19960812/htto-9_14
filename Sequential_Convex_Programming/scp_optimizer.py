@@ -5,7 +5,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import warnings
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Set
 import json
 import csv
 import os
@@ -82,7 +82,7 @@ class SequentialConvexTrussOptimizer:
         self.strict_mode = True
         # 节点融合开关（默认禁用；逐步打通后可启用）
         self.enable_node_merge = True
-        self.node_merge_threshold = 0.1
+        self.node_merge_threshold = 0.15
 
     # -------------------------------------------------------------
     # Utility: run a single SDP subproblem for diagnostics/benchmark
@@ -302,6 +302,17 @@ class SequentialConvexTrussOptimizer:
         # 记录 θ 映射（按当前优化变量的节点顺序）
         self.theta_node_ids = theta_ids
         self._prepare_symmetry_constraints(theta_ids)
+
+        # Rebuild areas if symmetry repair added members during initialization
+        if int(A_k.size) != int(self.n_elements):
+            if getattr(self, 'element_lengths', None) is None or len(self.element_lengths) != int(self.n_elements):
+                self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+            A_k = self.initialization_manager.initialize_areas(
+                self.n_elements,
+                self.element_lengths,
+                self.volume_constraint
+            )
+
         return theta_k, A_k
 
     def _prepare_symmetry_constraints(self, theta_ids: List[int]) -> None:
@@ -392,18 +403,192 @@ class SequentialConvexTrussOptimizer:
             mirror_map = self._build_full_node_mirror_map(pg.nodes, angle_tol, center_tol, radius_precision)
             member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
         except Exception as area_err:
-            print(f" Area symmetry disabled: {area_err}")
-            self.node_mirror_map = {}
-            self.symmetry_member_pairs = []
-            self.symmetry_member_fixed = []
-            self.area_symmetry_active = False
-        else:
-            self.node_mirror_map = mirror_map
-            self.symmetry_member_pairs = member_pairs
-            self.symmetry_member_fixed = member_fixed
-            self.area_symmetry_active = bool(member_pairs)
-            if self.area_symmetry_active:
-                print(f"Area symmetry enabled: {len(member_pairs)} mirror member pairs.")
+            repair_logs = []
+            if isinstance(area_err, ValueError) and "mirror member" in str(area_err):
+                repair_logs = self._enforce_member_symmetry(mirror_map)
+                for msg in repair_logs:
+                    print(f"[Symmetry][repair] {msg}")
+                if repair_logs:
+                    try:
+                        member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
+                    except Exception as second_err:
+                        print(f" Area symmetry disabled after repair attempt: {second_err}")
+                        self.node_mirror_map = {}
+                        self.symmetry_member_pairs = []
+                        self.symmetry_member_fixed = []
+                        self.area_symmetry_active = False
+                        return
+                else:
+                    print(f" Area symmetry disabled: {area_err}")
+                    self.node_mirror_map = {}
+                    self.symmetry_member_pairs = []
+                    self.symmetry_member_fixed = []
+                    self.area_symmetry_active = False
+                    return
+            else:
+                print(f" Area symmetry disabled: {area_err}")
+                self.node_mirror_map = {}
+                self.symmetry_member_pairs = []
+                self.symmetry_member_fixed = []
+                self.area_symmetry_active = False
+                return
+        self.node_mirror_map = mirror_map
+        self.symmetry_member_pairs = member_pairs
+        self.symmetry_member_fixed = member_fixed
+        self.area_symmetry_active = bool(member_pairs)
+        if self.area_symmetry_active:
+            print(f"Area symmetry enabled: {len(member_pairs)} mirror member pairs.")
+
+    def _pair_merge_groups_by_symmetry(
+        self,
+        merge_groups: List[List[int]],
+    ) -> Tuple[List[List[int]], List[str]]:
+        """Ensure node merge groups include mirrored counterparts when available."""
+        if not merge_groups:
+            return [], []
+        normalized_groups: List[List[int]] = []
+        for group in merge_groups:
+            if not group:
+                continue
+            seen_nodes: Set[int] = set()
+            int_group: List[int] = []
+            for nid in group:
+                try:
+                    node_id = int(nid)
+                except Exception:
+                    continue
+                if node_id not in seen_nodes:
+                    int_group.append(node_id)
+                    seen_nodes.add(node_id)
+            if int_group:
+                normalized_groups.append(int_group)
+        if not normalized_groups:
+            return [], []
+        if not getattr(self, "enable_symmetry", False):
+            return normalized_groups, []
+        mirror_map = getattr(self, "node_mirror_map", None)
+        if not mirror_map:
+            return normalized_groups, []
+        paired_groups: List[List[int]] = normalized_groups.copy()
+        warnings: List[str] = []
+        processed: Set[frozenset] = set()
+        group_lookup: Dict[frozenset, List[int]] = {
+            frozenset(group): group for group in normalized_groups
+        }
+        for group in normalized_groups:
+            group_key = frozenset(group)
+            if group_key in processed:
+                continue
+            processed.add(group_key)
+            mirror_nodes: List[int] = []
+            missing_nodes: List[int] = []
+            for nid in group:
+                mirrored = mirror_map.get(nid)
+                if mirrored is None:
+                    missing_nodes.append(nid)
+                    continue
+                mirror_nodes.append(int(mirrored))
+            if missing_nodes:
+                warnings.append(
+                    f"merge group {group} missing mirror nodes {missing_nodes}; skipping symmetric pairing"
+                )
+                continue
+            mirror_set = frozenset(mirror_nodes)
+            if not mirror_nodes or mirror_set == group_key:
+                continue
+            if mirror_set in processed:
+                continue
+            if mirror_set in group_lookup:
+                processed.add(mirror_set)
+                continue
+            mirror_target = mirror_map.get(group[0])
+            if mirror_target is None:
+                warnings.append(
+                    f"merge group {group} has no mirror target for node {group[0]}; skipping symmetric pairing"
+                )
+                continue
+            mirror_target = int(mirror_target)
+            mirror_group: List[int] = [mirror_target]
+            seen_mirror = {mirror_target}
+            for nid in group[1:]:
+                mirrored = mirror_map.get(nid)
+                if mirrored is None:
+                    continue
+                mirrored_int = int(mirrored)
+                if mirrored_int not in seen_mirror:
+                    mirror_group.append(mirrored_int)
+                    seen_mirror.add(mirrored_int)
+            for mirrored_int in mirror_nodes:
+                if mirrored_int not in seen_mirror:
+                    mirror_group.append(mirrored_int)
+                    seen_mirror.add(mirrored_int)
+            new_key = frozenset(seen_mirror)
+            processed.add(new_key)
+            group_lookup[new_key] = mirror_group
+            paired_groups.append(mirror_group)
+            warnings.append(
+                f"mirror merge group added: {mirror_group} (source {group})"
+            )
+        return paired_groups, warnings
+
+    def _enforce_member_symmetry(self, mirror_map: Dict[int, int]) -> List[str]:
+        """Ensure each member has a mirrored counterpart by adding missing edges."""
+        geometry = getattr(self, "geometry", None)
+        if geometry is None:
+            return []
+        elements_raw = getattr(geometry, "elements", None) or []
+        if not elements_raw:
+            return []
+        elements = [list(map(int, pair)) for pair in elements_raw]
+        area_list = None
+        if getattr(self, "current_areas", None) is not None:
+            try:
+                area_list = np.asarray(self.current_areas, dtype=float).tolist()
+            except Exception:
+                area_list = None
+        key_to_indices: Dict[Tuple[int, int], List[int]] = {}
+        for idx, pair in enumerate(elements):
+            key = tuple(sorted(pair))
+            key_to_indices.setdefault(key, []).append(idx)
+        changes: List[str] = []
+        new_elements = elements.copy()
+        for idx, pair in enumerate(elements):
+            n1, n2 = pair
+            m1 = mirror_map.get(n1)
+            m2 = mirror_map.get(n2)
+            if m1 is None or m2 is None:
+                continue
+            mirror_key = tuple(sorted((int(m1), int(m2))))
+            key = tuple(sorted((n1, n2)))
+            if mirror_key == key:
+                continue
+            if mirror_key not in key_to_indices:
+                new_elements.append([int(m1), int(m2)])
+                key_to_indices[mirror_key] = [len(new_elements) - 1]
+                if area_list is not None:
+                    base_area = area_list[idx] if idx < len(area_list) else float(self.A_min if hasattr(self, "A_min") else 0.0)
+                    area_list.append(base_area)
+                changes.append(f"added mirror element ({int(m1)},{int(m2)}) for ({n1},{n2})")
+        if not changes:
+            return []
+        geometry.elements = [list(pair) for pair in new_elements]
+        geometry.n_elements = len(new_elements)
+        self.geometry = geometry
+        self.n_elements = geometry.n_elements
+        if area_list is not None:
+            self.current_areas = np.asarray(area_list, dtype=float)
+        # Recompute element lengths & stiffness caches after modification
+        self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+        if hasattr(self.initializer, "element_lengths"):
+            self.initializer.element_lengths = self.element_lengths
+        if hasattr(self.initializer, "geometry"):
+            self.initializer.geometry = self.geometry
+        self.unit_stiffness_matrices = self.stiffness_calc.precompute_unit_stiffness_matrices(
+            self.geometry, self.element_lengths
+        )
+        if hasattr(self.initializer, "unit_stiffness_matrices"):
+            self.initializer.unit_stiffness_matrices = self.unit_stiffness_matrices
+        return changes
 
     def _check_node_set_symmetry(self, node_ids: List[int], nodes_by_id: dict, angle_tol: float, center_tol: float) -> bool:
         """判断给定节点集合在 θ 上是否关于 y 轴对称。"""
@@ -905,12 +1090,17 @@ class SequentialConvexTrussOptimizer:
                     if getattr(self, 'enable_node_merge', False):
                         theta_ids_current = list(self.theta_node_ids) if getattr(self, 'theta_node_ids', None) else []
                         merge_threshold = getattr(self, 'node_merge_threshold', 0.1)
-                        merge_groups = self.initializer.find_merge_groups(
+                        merge_groups_raw = self.initializer.find_merge_groups(
                             theta_ids=theta_ids_current,
                             merge_threshold=merge_threshold,
                             areas=A_k,
                             removal_threshold=getattr(self, 'removal_threshold', None),
                         )
+                        merge_groups = merge_groups_raw or []
+                        if merge_groups:
+                            merge_groups, symmetry_logs = self._pair_merge_groups_by_symmetry(merge_groups)
+                            for msg in symmetry_logs:
+                                print(f"[NodeMerge][symmetry] {msg}")
                         if merge_groups:
                             def _fmt_group(group):
                                 head = group[0]
@@ -985,6 +1175,9 @@ class SequentialConvexTrussOptimizer:
                             if symmetry_refresh_needed:
                                 try:
                                     self._prepare_symmetry_constraints(self.theta_node_ids)
+                                    if getattr(self, 'current_areas', None) is not None:
+                                        A_k = np.asarray(self.current_areas, dtype=float)
+                                        self.current_areas = A_k
                                 except Exception as sym_err:
                                     print(f"    Failed to rebuild symmetry constraints: {sym_err}")
                             # 重新计算逐点步长帽

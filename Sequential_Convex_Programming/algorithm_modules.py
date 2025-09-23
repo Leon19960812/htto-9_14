@@ -210,6 +210,9 @@ class StepQualityEvaluator:
             predicted = actual
         else:
             predicted = float(predicted_from_model)
+        print(f"[StepQuality] actual_compliance={actual:.6e} predicted_compliance={predicted:.6e}")
+        if not (np.isfinite(actual) and np.isfinite(predicted)):
+            print(f"[StepQuality] non-finite compliance detected: actual={actual}, predicted={predicted}")
 
         actual_reduction = current - actual
         predicted_reduction = current - predicted
@@ -217,6 +220,7 @@ class StepQualityEvaluator:
         # Guard: if模型预测本身就是“变差”（或无法给出下降），直接判定为劣质步长
         # 返回 -inf 让信赖域机制拒绝该步
         if predicted_reduction <= 0.0 or not np.isfinite(predicted_reduction):
+            print(f"[StepQuality] invalid predicted reduction: {predicted_reduction}")
             return float('-inf')
 
         if abs(predicted_reduction) < 1e-16:

@@ -402,10 +402,10 @@ Verification:
                     linewidth = 1
                     color = 'black'
                 elif linewidth_mode == 'fine':
-                    linewidth = 0.8 + 2.0 * area_ratio
+                    linewidth = 2.0 * area_ratio
                     color = 'darkblue'
                 else:  # 'variable'
-                    linewidth = 0.5 + 2.0 * area_ratio
+                    linewidth = 2.0 * area_ratio
                     color = 'darkblue'
                 
                 ax.plot([x1, x2], [y1, y2], color=color, 

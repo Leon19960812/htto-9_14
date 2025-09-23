@@ -206,7 +206,11 @@ def main(argv=None):
             viz = TrussVisualization()
 
             # Final structure (single figure showing final theta and A)
-            theta_use = getattr(opt, 'final_angles', None) or getattr(opt, 'current_angles', None)
+            theta_final = getattr(opt, 'final_angles', None)
+            if theta_final is not None:
+                theta_use = theta_final
+            else:
+                theta_use = getattr(opt, 'current_angles', None)
             coords_opt = opt._update_node_coordinates(theta_use)
             areas_final = getattr(opt, 'current_areas', None)
             if areas_final is None:

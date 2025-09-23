@@ -1,130 +1,203 @@
-Iteration 18/30
+Iteration 37/80
 ============================================================
 Solving joint linearized subproblem...
-[SCP-SDP] n_free=90, m=281, lambda_min(K_aff@k)=6.113e-06, lambda_max=7.450e-02
-[SCP-SDP] J_f=15, J_o=30, sum||Sym(Kθ_j)||_F(J_o)=5.617e+00, gamma_est(J_o)=1.928e-01, sum||Sym(Kθ_j)||_F(all)=7.751e+00, gamma_est(all)=2.673e-01, TR=3.491e-02
-[SCP-GEO] n_vars=45, same_pairs=2, cross_pairs=42, min_same_slack=0.1950457583138562, min_cross_slack=-1.9895196601282805e-13, buffer_slack=(7.236e-02,7.236e-02)
+[SCP-SDP] n_free=82, m=250, lambda_min(K_aff@k)=2.731e-06, lambda_max=1.122e-01
+[SCP-SDP] J_f=15, J_o=26, sum||Sym(Kθ_j)||_F(J_o)=1.253e+01, gamma_est(J_o)=4.374e-01, sum||Sym(Kθ_j)||_F(all)=1.717e+01, gamma_est(all)=5.992e-01, TR=3.491e-02
+[SCP-GEO] n_vars=41, same_pairs=2, cross_pairs=38, min_same_slack=0.2331638676524054, min_cross_slack=-1.1102230246251565e-15, buffer_slack=(1.438e-01,1.438e-01)
   Gradient cache refreshed
-  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=1.177e+04
-  Step norms: ||theta change||2=3.491e-02, ||A change||2=7.131e-03
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=4.084e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=4.859e-03
   Changes:
-    theta change: 3.490652e-02 (max change: 8.566419e-03)
-    A change: 7.130762e-03 (max change: 3.771710e-03)
-Quality backtracking: α=1.000, ρ=1.077
+    theta change: 3.490645e-02 (max change: 1.058681e-02)
+    A change: 4.858968e-03 (max change: 1.764789e-03)
+Quality backtracking: α=1.000, ρ=1.068
 Trust region: 0.0349 -> 0.0349 (EXPAND)
-   Accepted step (success #18)
-   Compliance: 2.750235e+03 → 2.716467e+03
-   Improvement: 1.23%
-[NodeMerge] 2 candidate group(s) @ 0.250 m: 48<-(47), 32<-(33)
+   Accepted step (success #37)
+   Compliance: 3.792287e+03 → 3.748455e+03
+   Improvement: 1.16%
+
+============================================================
+Iteration 38/80
+============================================================
+Solving joint linearized subproblem...
+[SCP-SDP] n_free=82, m=250, lambda_min(K_aff@k)=3.266e-06, lambda_max=1.334e-01
+[SCP-SDP] J_f=15, J_o=26, sum||Sym(Kθ_j)||_F(J_o)=1.732e+01, gamma_est(J_o)=6.045e-01, sum||Sym(Kθ_j)||_F(all)=2.364e+01, gamma_est(all)=8.253e-01, TR=3.491e-02
+[SCP-GEO] n_vars=41, same_pairs=2, cross_pairs=38, min_same_slack=0.2363729464344401, min_cross_slack=-6.550315845288424e-14, buffer_slack=(1.477e-01,1.477e-01)
+  Gradient cache refreshed
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=5.243e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=8.978e-03
+  Changes:
+    theta change: 3.490643e-02 (max change: 1.100775e-02)
+    A change: 8.977766e-03 (max change: 3.867644e-03)
+Quality backtracking: α=1.000, ρ=1.098
+Trust region: 0.0349 -> 0.0349 (EXPAND)
+   Accepted step (success #38)
+   Compliance: 3.748455e+03 → 3.702038e+03
+   Improvement: 1.24%
+
+============================================================
+Iteration 39/80
+============================================================
+Solving joint linearized subproblem...
+[SCP-SDP] n_free=82, m=250, lambda_min(K_aff@k)=3.276e-06, lambda_max=1.718e-01
+[SCP-SDP] J_f=15, J_o=26, sum||Sym(Kθ_j)||_F(J_o)=2.802e+01, gamma_est(J_o)=9.781e-01, sum||Sym(Kθ_j)||_F(all)=3.772e+01, gamma_est(all)=1.317e+00, TR=3.491e-02
+[SCP-GEO] n_vars=41, same_pairs=2, cross_pairs=38, min_same_slack=0.23914433265425342, min_cross_slack=-2.6867397195928788e-14, buffer_slack=(1.512e-01,1.512e-01)
+  Gradient cache refreshed
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=8.522e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=3.179e-03
+  Changes:
+    theta change: 3.490649e-02 (max change: 1.106599e-02)
+    A change: 3.179119e-03 (max change: 9.975481e-04)
+Quality backtracking: α=1.000, ρ=1.152
+Trust region: 0.0349 -> 0.0349 (EXPAND)
+   Accepted step (success #39)
+   Compliance: 3.702038e+03 → 3.652321e+03
+   Improvement: 1.34%
+[NodeMerge] 4 candidate group(s) @ 0.100 m: 42<-(43), 31<-(32), 27<-(28), ...
 LoadCalculator initialized:
   Mode: SimpleHydrostatic
  reinitialized load calculator with shell FEA.
 Cleared linearization cache; next iteration will re-linearize.
-Symmetry constraints enabled: 20 mirror pairs; 3 nodes fixed at pi/2.
- Area symmetry disabled: Element (14,28) can't find mirror member
-   Re-evaluated compliance after merge: 3.545405e+03
-   Recomputed cached stiffness matrices; 264 elements total
+Symmetry constraints enabled: 17 mirror pairs; 3 nodes fixed at pi/2.
+[Symmetry][repair] added mirror element (18,29) for (24,39)
+[Symmetry][repair] added mirror element (27,26) for (15,16)
+[Symmetry][repair] added mirror element (16,31) for (26,37)
+[Symmetry][repair] added mirror element (12,39) for (2,29)
+[Symmetry][repair] added mirror element (4,16) for (10,26)
+[Symmetry][repair] added mirror element (27,39) for (15,29)
+[Symmetry][repair] added mirror element (18,16) for (24,26)
+[Symmetry][repair] added mirror element (26,40) for (16,28)
+[Symmetry][repair] added mirror element (30,29) for (38,39)
+[Symmetry][repair] added mirror element (4,29) for (10,39)
+[Symmetry][repair] added mirror element (1,29) for (13,39)
+Area symmetry enabled: 109 mirror member pairs.
+   Re-evaluated compliance after merge: 4.766248e+03
+   Recomputed cached stiffness matrices; 222 elements total
 
 ============================================================
-Iteration 19/30
+Iteration 40/80
 ============================================================
 Solving joint linearized subproblem...
-[SCP-SDP] n_free=86, m=264, lambda_min(K_aff@k)=5.644e-06, lambda_max=7.037e-02
-[SCP-SDP] J_f=15, J_o=28, sum||Sym(Kθ_j)||_F(J_o)=4.914e+00, gamma_est(J_o)=1.683e-01, sum||Sym(Kθ_j)||_F(all)=6.959e+00, gamma_est(all)=2.396e-01, TR=3.491e-02
-[SCP-GEO] n_vars=43, same_pairs=1, cross_pairs=41, min_same_slack=0.19614182508752412, min_cross_slack=1.7896795156957523e-13, buffer_slack=(6.786e-02,6.786e-02)
+[SCP-SDP] n_free=74, m=222, lambda_min(K_aff@k)=2.978e-06, lambda_max=1.083e-01
+[SCP-SDP] J_f=15, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.610e+00, gamma_est(J_o)=5.619e-02, sum||Sym(Kθ_j)||_F(all)=1.921e+01, gamma_est(all)=2.784e-01, TR=3.491e-02
+[SCP-GEO] n_vars=37, same_pairs=2, cross_pairs=34, min_same_slack=0.19129931354255789, min_cross_slack=2.4424906541753444e-14, buffer_slack=(1.544e-01,1.544e-01)
   Gradient cache refreshed
-  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=1.295e+03
-  Step norms: ||theta change||2=3.491e-02, ||A change||2=3.812e-02
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=7.907e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=1.918e-02
   Changes:
-    theta change: 3.490654e-02 (max change: 1.171196e-02)
-    A change: 3.811759e-02 (max change: 9.916148e-03)
-Quality backtracking: α=1.000, ρ=1.016
+    theta change: 3.490655e-02 (max change: 1.101605e-02)
+    A change: 1.917822e-02 (max change: 9.998870e-03)
+Quality backtracking: α=1.000, ρ=1.004
 Trust region: 0.0349 -> 0.0349 (EXPAND)
-   Accepted step (success #19)
-   Compliance: 3.545405e+03 → 3.100550e+03
-   Improvement: 12.55%
+   Accepted step (success #40)
+   Compliance: 4.766248e+03 → 3.682641e+03
+   Improvement: 22.74%
 
 ============================================================
-Iteration 20/30
+Iteration 41/80
 ============================================================
 Solving joint linearized subproblem...
-[SCP-SDP] n_free=86, m=264, lambda_min(K_aff@k)=5.726e-05, lambda_max=7.413e-02
-[SCP-SDP] J_f=15, J_o=28, sum||Sym(Kθ_j)||_F(J_o)=5.404e+00, gamma_est(J_o)=1.839e-01, sum||Sym(Kθ_j)||_F(all)=7.746e+00, gamma_est(all)=2.656e-01, TR=3.491e-02
-[SCP-GEO] n_vars=43, same_pairs=1, cross_pairs=41, min_same_slack=0.1982244230616598, min_cross_slack=-4.89164264649844e-13, buffer_slack=(5.615e-02,5.615e-02)
+[SCP-SDP] n_free=74, m=222, lambda_min(K_aff@k)=2.737e-06, lambda_max=2.164e-01
+[SCP-SDP] J_f=15, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.768e+00, gamma_est(J_o)=6.170e-02, sum||Sym(Kθ_j)||_F(all)=4.170e+01, gamma_est(all)=5.334e-01, TR=3.491e-02
+[SCP-GEO] n_vars=37, same_pairs=2, cross_pairs=34, min_same_slack=0.1957767639491745, min_cross_slack=-2.0765611452588928e-12, buffer_slack=(1.604e-01,1.604e-01)
   Gradient cache refreshed
-  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=1.136e+03
-  Step norms: ||theta change||2=3.491e-02, ||A change||2=5.022e-03
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=1.028e+05
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=2.901e-03
   Changes:
-    theta change: 3.490653e-02 (max change: 1.260727e-02)
-    A change: 5.022405e-03 (max change: 2.880882e-03)
-Quality backtracking: α=1.000, ρ=1.172
+    theta change: 3.490658e-02 (max change: 1.101636e-02)
+    A change: 2.901086e-03 (max change: 1.286448e-03)
+Quality backtracking: α=1.000, ρ=1.029
 Trust region: 0.0349 -> 0.0349 (EXPAND)
-   Accepted step (success #20)
-   Compliance: 3.100550e+03 → 3.046536e+03
-   Improvement: 1.74%
-[NodeMerge] 2 candidate group(s) @ 0.250 m: 15<-(16), 31<-(30)
+   Accepted step (success #41)
+   Compliance: 3.682641e+03 → 3.645743e+03
+   Improvement: 1.00%
+[NodeMerge] 2 candidate group(s) @ 0.100 m: 1<-(2), 12<-(13)
 LoadCalculator initialized:
   Mode: SimpleHydrostatic
  reinitialized load calculator with shell FEA.
 Cleared linearization cache; next iteration will re-linearize.
-Symmetry constraints enabled: 19 mirror pairs; 3 nodes fixed at pi/2.
- Area symmetry disabled: Element (14,27) can't find mirror member
-   Re-evaluated compliance after merge: 4.160866e+03
-   Recomputed cached stiffness matrices; 246 elements total
+Symmetry constraints enabled: 16 mirror pairs; 3 nodes fixed at pi/2.
+[Symmetry][repair] added mirror element (11,25) for (1,13)
+[Symmetry][repair] added mirror element (1,29) for (11,35)
+[Symmetry][repair] added mirror element (3,1) for (9,11)
+[Symmetry][repair] added mirror element (11,38) for (1,26)
+[Symmetry][repair] added mirror element (1,16) for (11,22)
+Area symmetry enabled: 102 mirror member pairs.
+   Re-evaluated compliance after merge: 4.311666e+03
+   Recomputed cached stiffness matrices; 208 elements total
 
 ============================================================
-Iteration 21/30
+Iteration 42/80
 ============================================================
 Solving joint linearized subproblem...
-[SCP-SDP] n_free=82, m=246, lambda_min(K_aff@k)=6.890e-05, lambda_max=6.805e-02
-[SCP-SDP] J_f=15, J_o=26, sum||Sym(Kθ_j)||_F(J_o)=4.371e+00, gamma_est(J_o)=1.526e-01, sum||Sym(Kθ_j)||_F(all)=6.477e+00, gamma_est(all)=2.261e-01, TR=3.491e-02
-[SCP-GEO] n_vars=41, same_pairs=3, cross_pairs=37, min_same_slack=0.20063121057869374, min_cross_slack=1.887379141862766e-14, buffer_slack=(4.354e-02,4.354e-02)
+[SCP-SDP] n_free=70, m=208, lambda_min(K_aff@k)=2.560e-06, lambda_max=4.942e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.698e+00, gamma_est(J_o)=5.925e-02, sum||Sym(Kθ_j)||_F(all)=3.241e+00, gamma_est(all)=1.131e-01, TR=3.491e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.24460775704550078, min_cross_slack=0.0, buffer_slack=(1.652e-01,1.652e-01)
+⚠️ Area symmetry solve failed; temporarily disabling area equality: Solver 'MOSEK' failed. Try another solver, or solve with verbose=True foor more information.
+[SCP-SDP] n_free=70, m=208, lambda_min(K_aff@k)=2.560e-06, lambda_max=4.942e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.698e+00, gamma_est(J_o)=5.925e-02, sum||Sym(Kθ_j)||_F(all)=3.241e+00, gamma_est(all)=1.131e-01, TR=3.491e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.24460775704550078, min_cross_slack=0.0, buffer_slack=(1.652e-01,1.652e-01)
   Gradient cache refreshed
-  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=7.528e+02
-  Step norms: ||theta change||2=3.491e-02, ||A change||2=2.354e-02
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=1.913e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=2.594e-02
   Changes:
-    theta change: 3.490658e-02 (max change: 1.510806e-02)
-    A change: 2.354035e-02 (max change: 6.854938e-03)
-Quality backtracking: α=1.000, ρ=1.016
+    theta change: 3.490657e-02 (max change: 1.057571e-02)
+    A change: 2.593647e-02 (max change: 9.998976e-03)
+Quality backtracking: α=1.000, ρ=1.002
 Trust region: 0.0349 -> 0.0349 (EXPAND)
-   Accepted step (success #21)
-   Compliance: 4.160866e+03 → 3.901680e+03
-   Improvement: 6.23%
+   Accepted step (success #42)
+   Compliance: 4.311666e+03 → 3.123534e+03
+   Improvement: 27.56%
 
 ============================================================
-Iteration 22/30
+Iteration 43/80
 ============================================================
 Solving joint linearized subproblem...
-[SCP-SDP] n_free=82, m=246, lambda_min(K_aff@k)=9.656e-05, lambda_max=7.269e-02
-[SCP-SDP] J_f=15, J_o=26, sum||Sym(Kθ_j)||_F(J_o)=4.868e+00, gamma_est(J_o)=1.699e-01, sum||Sym(Kθ_j)||_F(all)=7.127e+00, gamma_est(all)=2.488e-01, TR=3.491e-02
-[SCP-GEO] n_vars=41, same_pairs=3, cross_pairs=37, min_same_slack=0.20315988364385743, min_cross_slack=-2.220446049250313e-14, buffer_slack=(5.865e-02,5.865e-02)
+[SCP-SDP] n_free=70, m=208, lambda_min(K_aff@k)=2.613e-06, lambda_max=4.998e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=1.984e+00, gamma_est(J_o)=6.924e-02, sum||Sym(Kθ_j)||_F(all)=4.065e+00, gamma_est(all)=1.419e-01, TR=3.491e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.2478270748847974, min_cross_slack=1.9095836023552692e-14, buffer_slack=(1.657e-01,1.657e-01)
   Gradient cache refreshed
-  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=7.822e+02
-  Step norms: ||theta change||2=3.491e-02, ||A change||2=4.980e-03
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=2.014e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=2.399e-03
   Changes:
-    theta change: 3.490658e-02 (max change: 1.408944e-02)
-    A change: 4.979606e-03 (max change: 2.543611e-03)
-Quality backtracking: α=1.000, ρ=1.019
+    theta change: 3.490658e-02 (max change: 1.043309e-02)
+    A change: 2.399294e-03 (max change: 8.985520e-04)
+Quality backtracking: α=1.000, ρ=1.027
 Trust region: 0.0349 -> 0.0349 (EXPAND)
-   Accepted step (success #22)
-   Compliance: 3.901680e+03 → 3.840835e+03
-   Improvement: 1.56%
+   Accepted step (success #43)
+   Compliance: 3.123534e+03 → 3.086029e+03
+   Improvement: 1.20%
 
 ============================================================
-Iteration 23/30
+Iteration 44/80
 ============================================================
 Solving joint linearized subproblem...
-[SCP-SDP] n_free=82, m=246, lambda_min(K_aff@k)=9.447e-05, lambda_max=7.390e-02
-[SCP-SDP] J_f=15, J_o=26, sum||Sym(Kθ_j)||_F(J_o)=5.112e+00, gamma_est(J_o)=1.785e-01, sum||Sym(Kθ_j)||_F(all)=7.447e+00, gamma_est(all)=2.600e-01, TR=3.491e-02
-[SCP-GEO] n_vars=41, same_pairs=3, cross_pairs=37, min_same_slack=0.2054922733717183, min_cross_slack=-6.439293542825908e-15, buffer_slack=(7.274e-02,7.274e-02)
+[SCP-SDP] n_free=70, m=208, lambda_min(K_aff@k)=2.538e-06, lambda_max=5.110e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=2.132e+00, gamma_est(J_o)=7.441e-02, sum||Sym(Kθ_j)||_F(all)=4.288e+00, gamma_est(all)=1.497e-01, TR=3.491e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.2509107302908732, min_cross_slack=-5.3512749786932545e-14, buffer_slack=(1.645e-01,1.645e-01)
   Gradient cache refreshed
-  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=8.063e+02
-  Step norms: ||theta change||2=3.491e-02, ||A change||2=6.763e-03
+  Line search (SPD guard): alpha_final=1.000 | tried: 1.000 | cond(K_ff)~=2.110e+04
+  Step norms: ||theta change||2=3.491e-02, ||A change||2=2.252e-03
   Changes:
-    theta change: 3.490658e-02 (max change: 1.268976e-02)
-    A change: 6.763227e-03 (max change: 3.888101e-03)
-Quality backtracking: α=1.000, ρ=1.036
+    theta change: 3.490658e-02 (max change: 1.049877e-02)
+    A change: 2.252027e-03 (max change: 6.916841e-04)
+Quality backtracking: α=1.000, ρ=1.029
 Trust region: 0.0349 -> 0.0349 (EXPAND)
-   Accepted step (success #23)
-   Compliance: 3.840835e+03 → 3.782782e+03
-   Improvement: 1.51%
+   Accepted step (success #44)
+   Compliance: 3.086029e+03 → 3.049180e+03
+   Improvement: 1.19%
+
+============================================================
+Iteration 45/80
+============================================================
+Solving joint linearized subproblem...
+[SCP-SDP] n_free=70, m=208, lambda_min(K_aff@k)=2.487e-06, lambda_max=5.248e-02
+[SCP-SDP] J_f=13, J_o=22, sum||Sym(Kθ_j)||_F(J_o)=2.327e+00, gamma_est(J_o)=8.122e-02, sum||Sym(Kθ_j)||_F(all)=4.576e+00, gamma_est(all)=1.597e-01, TR=3.491e-02
+[SCP-GEO] n_vars=35, same_pairs=1, cross_pairs=33, min_same_slack=0.25403371022977284, min_cross_slack=-1.84297022087776e-14, buffer_slack=(1.638e-01,1.638e-01)
+❌ Iteration 45 failed: MOSEK solve failed for SDP subproblem: Solver 'MOSEK' failed. Try another solver, or solve with verbose=True for more information.
+
+⚠️ Optimization terminated with an error. Partial results will be used for exports.
+   Reason: MOSEK solve failed for SDP subproblem: Solver 'MOSEK' failed. Try another solver, or solve with verbose=True for more information.
+Current compliance at failure: 3.049180e+03
+Failed to save figures: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+Partial figures correspond to the last accepted iterate.
