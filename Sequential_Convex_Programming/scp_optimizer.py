@@ -36,7 +36,8 @@ class SequentialConvexTrussOptimizer:
                  enable_aasi: bool = False,
                  polar_rings: 'Optional[list]' = None,
                  simple_loads: bool = False,
-                 enforce_symmetry: bool = False):
+                 enforce_symmetry: bool = False,
+                 enable_symmetry_repair: bool = False):
         """初始化优化器"""
         print("Initializing SCP...")
         
@@ -49,6 +50,7 @@ class SequentialConvexTrussOptimizer:
         self.enable_aasi = enable_aasi
         # 是否启用对称约束
         self.enable_symmetry = bool(enforce_symmetry)
+        self.enable_symmetry_repair = bool(enable_symmetry_repair)
 
         # 1. 初始化基础系统
         polar_config = {"rings": polar_rings} if polar_rings else None
@@ -82,7 +84,7 @@ class SequentialConvexTrussOptimizer:
         self.strict_mode = True
         # 节点融合开关（默认禁用；逐步打通后可启用）
         self.enable_node_merge = True
-        self.node_merge_threshold = 0.15
+        self.node_merge_threshold = 0.2
 
     # -------------------------------------------------------------
     # Utility: run a single SDP subproblem for diagnostics/benchmark
@@ -401,10 +403,25 @@ class SequentialConvexTrussOptimizer:
         # 镜像节点映射与构件面积对称配对
         try:
             mirror_map = self._build_full_node_mirror_map(pg.nodes, angle_tol, center_tol, radius_precision)
+        except Exception as map_err:
+            print(f"Symmetry constraints disabled while building mirror map: {map_err}")
+            self.enable_symmetry = False
+            self.node_mirror_map = {}
+            self.symmetry_member_pairs = []
+            self.symmetry_member_fixed = []
+            self.area_symmetry_active = False
+            return
+
+        self.node_mirror_map = mirror_map
+
+        member_pairs: List[Tuple[int, int]] = []
+        member_fixed: List[int] = []
+        try:
             member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
         except Exception as area_err:
-            repair_logs = []
-            if isinstance(area_err, ValueError) and "mirror member" in str(area_err):
+            repair_logs: List[str] = []
+            needs_repair = isinstance(area_err, ValueError) and "mirror member" in str(area_err)
+            if needs_repair and getattr(self, 'enable_symmetry_repair', False):
                 repair_logs = self._enforce_member_symmetry(mirror_map)
                 for msg in repair_logs:
                     print(f"[Symmetry][repair] {msg}")
@@ -413,26 +430,17 @@ class SequentialConvexTrussOptimizer:
                         member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
                     except Exception as second_err:
                         print(f" Area symmetry disabled after repair attempt: {second_err}")
-                        self.node_mirror_map = {}
-                        self.symmetry_member_pairs = []
-                        self.symmetry_member_fixed = []
-                        self.area_symmetry_active = False
-                        return
+                        member_pairs, member_fixed = [], []
                 else:
                     print(f" Area symmetry disabled: {area_err}")
-                    self.node_mirror_map = {}
-                    self.symmetry_member_pairs = []
-                    self.symmetry_member_fixed = []
-                    self.area_symmetry_active = False
-                    return
+                    member_pairs, member_fixed = [], []
             else:
-                print(f" Area symmetry disabled: {area_err}")
-                self.node_mirror_map = {}
-                self.symmetry_member_pairs = []
-                self.symmetry_member_fixed = []
-                self.area_symmetry_active = False
-                return
-        self.node_mirror_map = mirror_map
+                if needs_repair and not getattr(self, 'enable_symmetry_repair', False):
+                    print(f" Area symmetry disabled (symmetry repair disabled): {area_err}")
+                else:
+                    print(f" Area symmetry disabled: {area_err}")
+                member_pairs, member_fixed = [], []
+
         self.symmetry_member_pairs = member_pairs
         self.symmetry_member_fixed = member_fixed
         self.area_symmetry_active = bool(member_pairs)
@@ -469,66 +477,57 @@ class SequentialConvexTrussOptimizer:
         mirror_map = getattr(self, "node_mirror_map", None)
         if not mirror_map:
             return normalized_groups, []
-        paired_groups: List[List[int]] = normalized_groups.copy()
+
+        paired_groups: List[List[int]] = []
         warnings: List[str] = []
         processed: Set[frozenset] = set()
         group_lookup: Dict[frozenset, List[int]] = {
             frozenset(group): group for group in normalized_groups
         }
+
         for group in normalized_groups:
             group_key = frozenset(group)
             if group_key in processed:
                 continue
-            processed.add(group_key)
+
             mirror_nodes: List[int] = []
             missing_nodes: List[int] = []
             for nid in group:
                 mirrored = mirror_map.get(nid)
                 if mirrored is None:
-                    missing_nodes.append(nid)
-                    continue
-                mirror_nodes.append(int(mirrored))
+                    missing_nodes.append(int(nid))
+                else:
+                    mirror_nodes.append(int(mirrored))
+
             if missing_nodes:
                 warnings.append(
-                    f"merge group {group} missing mirror nodes {missing_nodes}; skipping symmetric pairing"
+                    f"merge group {group} skipped: missing mirror nodes {missing_nodes}"
                 )
                 continue
-            mirror_set = frozenset(mirror_nodes)
-            if not mirror_nodes or mirror_set == group_key:
+
+            mirror_key = frozenset(mirror_nodes)
+
+            if mirror_key == group_key:
+                paired_groups.append(group)
+                processed.add(group_key)
                 continue
-            if mirror_set in processed:
-                continue
-            if mirror_set in group_lookup:
-                processed.add(mirror_set)
-                continue
-            mirror_target = mirror_map.get(group[0])
-            if mirror_target is None:
+
+            mirror_group = group_lookup.get(mirror_key)
+            if mirror_group is None:
                 warnings.append(
-                    f"merge group {group} has no mirror target for node {group[0]}; skipping symmetric pairing"
+                    f"merge group {group} skipped: mirrored counterpart {sorted(mirror_nodes)} not found"
                 )
                 continue
-            mirror_target = int(mirror_target)
-            mirror_group: List[int] = [mirror_target]
-            seen_mirror = {mirror_target}
-            for nid in group[1:]:
-                mirrored = mirror_map.get(nid)
-                if mirrored is None:
-                    continue
-                mirrored_int = int(mirrored)
-                if mirrored_int not in seen_mirror:
-                    mirror_group.append(mirrored_int)
-                    seen_mirror.add(mirrored_int)
-            for mirrored_int in mirror_nodes:
-                if mirrored_int not in seen_mirror:
-                    mirror_group.append(mirrored_int)
-                    seen_mirror.add(mirrored_int)
-            new_key = frozenset(seen_mirror)
-            processed.add(new_key)
-            group_lookup[new_key] = mirror_group
+
+            if mirror_key in processed:
+                processed.add(group_key)
+                continue
+
+            paired_groups.append(group)
             paired_groups.append(mirror_group)
-            warnings.append(
-                f"mirror merge group added: {mirror_group} (source {group})"
-            )
+            processed.add(group_key)
+            processed.add(mirror_key)
+
         return paired_groups, warnings
 
     def _enforce_member_symmetry(self, mirror_map: Dict[int, int]) -> List[str]:

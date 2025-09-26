@@ -439,7 +439,7 @@ class TrussSystemInitializer:
     ) -> List[List[int]]:
         from .node_merger import NodeMerger
 
-        merger = NodeMerger(self.geometry, self.constraint_calc, merge_threshold)
+        merger = NodeMerger(self.geometry, self.constraint_calc, merge_threshold, a_max=getattr(self, 'A_max', None))
         groups = merger.find_merge_groups(
             theta_ids=theta_ids,
             merge_threshold=merge_threshold,
@@ -460,7 +460,7 @@ class TrussSystemInitializer:
         from .node_merger import NodeMerger, MERGE_THRESHOLD_DEFAULT
 
         threshold = MERGE_THRESHOLD_DEFAULT if merge_threshold is None else float(merge_threshold)
-        merger = NodeMerger(self.geometry, self.constraint_calc, threshold)
+        merger = NodeMerger(self.geometry, self.constraint_calc, threshold, a_max=getattr(self, 'A_max', None))
         result = merger.merge_node_groups(theta, theta_ids, A, merge_groups)
 
         if result.structure_modified:

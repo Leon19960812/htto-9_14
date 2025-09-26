@@ -26,10 +26,11 @@ class MergeResult:
 class NodeMerger:
     """Utility to detect and merge near-duplicate nodes based on Euclidean distance."""
 
-    def __init__(self, geometry, constraint_calc, merge_threshold: float = MERGE_THRESHOLD_DEFAULT):
+    def __init__(self, geometry, constraint_calc, merge_threshold: float = MERGE_THRESHOLD_DEFAULT, a_max: Optional[float] = None):
         self.geometry = geometry
         self.constraint_calc = constraint_calc
         self.merge_threshold = float(merge_threshold)
+        self.a_max = None if a_max is None else float(a_max)
 
     def find_merge_groups(
         self,
@@ -128,39 +129,56 @@ class NodeMerger:
         remove_nodes: Set[int] = set()
         merged_pairs: List[Tuple[int, int]] = []
         removed_members: List[int] = []
+        representative_map: Dict[int, int] = {}
 
         for group in merge_groups:
             if len(group) < 2:
                 continue
             target = int(group[0])
             members = [int(nid) for nid in group[1:]]
+            representative_map[target] = target
+            for member in members:
+                representative_map[member] = target
             remove_nodes.update(members)
             merged_pairs.extend((target, member) for member in members)
             removed_members.extend(members)
 
             if target in support_nodes and 0 <= target < coords_old.shape[0]:
                 target_coords[target] = coords_old[target]
-                continue
-
-            pts = []
-            for nid in group:
-                if 0 <= nid < coords_old.shape[0]:
-                    pts.append(coords_old[nid])
-            if not pts:
-                continue
-            new_coord = np.mean(np.asarray(pts, dtype=float), axis=0)
-            target_coords[target] = new_coord
+            else:
+                pts = []
+                for nid in group:
+                    if 0 <= nid < coords_old.shape[0]:
+                        pts.append(coords_old[nid])
+                if pts:
+                    new_coord = np.mean(np.asarray(pts, dtype=float), axis=0)
+                    target_coords[target] = new_coord
 
         remove_nodes = set(remove_nodes)
+
+        # Ensure nodes not in representative_map default to themselves
+        total_nodes = len(self.geometry.nodes)
+        for nid in range(total_nodes):
+            representative_map.setdefault(nid, nid)
 
         old_to_new: Dict[int, int] = {}
         new_nodes: List[List[float]] = []
         for old_id, xy in enumerate(self.geometry.nodes):
-            if old_id in remove_nodes:
+            rep = representative_map.get(old_id, old_id)
+            if rep != old_id:
                 continue
             new_xy = target_coords.get(old_id, np.asarray(xy, dtype=float))
             old_to_new[old_id] = len(new_nodes)
             new_nodes.append([float(new_xy[0]), float(new_xy[1])])
+
+        # 为被移除节点建立到代表节点的新索引映射
+        for old_id in range(total_nodes):
+            if old_id in old_to_new:
+                continue
+            rep = representative_map.get(old_id, old_id)
+            mapped_idx = old_to_new.get(rep)
+            if mapped_idx is not None:
+                old_to_new[old_id] = mapped_idx
 
         geometry.nodes = new_nodes
         geometry.n_nodes = len(new_nodes)
@@ -170,8 +188,6 @@ class NodeMerger:
         new_elements: List[List[int]] = []
         new_areas: List[float] = []
         for eid, (n1, n2) in enumerate(self.geometry.elements):
-            if n1 in remove_nodes or n2 in remove_nodes:
-                continue
             nn1 = old_to_new.get(n1)
             nn2 = old_to_new.get(n2)
             if nn1 is None or nn2 is None or nn1 == nn2:
@@ -181,10 +197,15 @@ class NodeMerger:
             if key in edge_map:
                 idx = edge_map[key]
                 new_areas[idx] += area_val
+                if self.a_max is not None:
+                    new_areas[idx] = min(new_areas[idx], self.a_max)
             else:
                 edge_map[key] = len(new_elements)
                 new_elements.append([key[0], key[1]])
-                new_areas.append(area_val)
+                if self.a_max is not None:
+                    new_areas.append(min(area_val, self.a_max))
+                else:
+                    new_areas.append(area_val)
 
         geometry.elements = new_elements
         geometry.n_elements = len(new_elements)
