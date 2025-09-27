@@ -402,10 +402,10 @@ Verification:
                     linewidth = 1
                     color = 'black'
                 elif linewidth_mode == 'fine':
-                    linewidth = 2.0 * area_ratio
+                    linewidth = 0.5 + 2.0 * area_ratio
                     color = 'darkblue'
                 else:  # 'variable'
-                    linewidth = 2.0 * area_ratio
+                    linewidth = 0.5 + 2.0 * area_ratio
                     color = 'darkblue'
                 
                 ax.plot([x1, x2], [y1, y2], color=color, 
@@ -467,9 +467,10 @@ Verification:
             # 退化处理：若计算失败，回退到已存储的向量（可能不完全一致，但可避免崩溃）
             current_load_vector = optimizer.load_vector
         
-        # 绘制径向荷载
-        max_load = np.max(np.sqrt(current_load_vector[::2]**2 + current_load_vector[1::2]**2))
-        
+        # 绘制荷载箭头（根据实际矢量方向，不再假设纯径向）
+        load_norms = np.sqrt(current_load_vector[::2]**2 + current_load_vector[1::2]**2)
+        max_load = float(np.max(load_norms)) if load_norms.size else 0.0
+
         load_nodes = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
         for i, node_idx in enumerate(load_nodes):
             x, y = nodes_array[node_idx]
@@ -478,12 +479,20 @@ Verification:
             
             if abs(load_x) > 1e-6 or abs(load_y) > 1e-6:
                 load_magnitude = np.sqrt(load_x**2 + load_y**2)
-                arrow_scale = load_magnitude / max_load * 0.3
-                
-                ax.arrow(x, y, load_x/load_magnitude * arrow_scale, 
-                        load_y/load_magnitude * arrow_scale,
-                        head_width=0.05, head_length=0.05, 
-                        fc='red', ec='red', alpha=0.8)
+                if max_load <= 0.0:
+                    continue
+                arrow_len = (load_magnitude / max_load) * 0.3
+                dx = (load_x / load_magnitude) * arrow_len
+                dy = (load_y / load_magnitude) * arrow_len
+                head_width = max(0.01, min(0.05, arrow_len * 0.4))
+                head_length = max(0.01, min(0.06, arrow_len * 0.6))
+
+                ax.arrow(
+                    x, y, dx, dy,
+                    head_width=head_width,
+                    head_length=head_length,
+                    fc='red', ec='red', alpha=0.8, length_includes_head=True
+                )
         
         # 绘制结构轮廓
         for i, ((node1, node2), area) in enumerate(zip(optimizer.elements, optimizer.final_areas)):

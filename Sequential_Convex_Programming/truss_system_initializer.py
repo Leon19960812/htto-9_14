@@ -232,7 +232,10 @@ class ConstraintCalculator:
 class TrussSystemInitializer:
     """Unified initializer using PolarGeometry and clean helpers."""
 
-    def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2, E_steel=210e9, enable_middle_layer=False, middle_layer_ratio=0.85, use_polar: bool = True, polar_config: dict = None, simple_loads: bool = False):
+    def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2,
+                 E_steel=210e9, E_shell=210e9,
+                 enable_middle_layer=False, middle_layer_ratio=0.85,
+                 use_polar: bool = True, polar_config: dict = None, simple_loads: bool = False):
         # Store basic parameters
         self.radius = float(radius)
         self.n_sectors = int(n_sectors)
@@ -253,23 +256,28 @@ class TrussSystemInitializer:
             removal_threshold=1e-4,
         )
 
+        if E_shell is None:
+            E_shell = float(E_steel)
+        self.E_shell = float(E_shell)
+
         # Calculators
         self.geometry_calc = GeometryCalculator()
         try:
             from .load_calculator_with_shell import LoadCalculatorWithShell
-            shell_params = {
+            self.use_simple_loads = bool(simple_loads)
+            self.shell_params = {
                 "outer_radius": self.radius,
                 "depth": self.depth,
-                "thickness": 0.01,
-                "n_circumferential": max(8, self.n_sectors + 1),
-                "n_radial": 2,
-                "E_shell": float(self.material_data.E_steel),
+                "thickness": 0.15,
+                "n_circumferential": 30,
+                "n_radial": 4,
+                "E_shell": self.E_shell,
             }
-            self.use_simple_loads = bool(simple_loads)
+            shell_cfg = dict(self.shell_params)
             self.load_calc = LoadCalculatorWithShell(
                 self.material_data,
                 enable_shell=(not self.use_simple_loads),
-                shell_params=shell_params,
+                shell_params=shell_cfg,
                 simple_mode=self.use_simple_loads,
             )
         except Exception as e:

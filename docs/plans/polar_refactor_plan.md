@@ -74,3 +74,10 @@
 ## 当前状态
 - 文档统一到一维 theta 方案；多层相关计划已移除。
 - 下一步：在优化器接入 `PolarGeometry` 并调整 `ConstraintBuilder`。
+## Shell Load Calculator Refactor (2025-09)
+
+- Replace `_compute_pressure_loads()` with a mesh-independent pressure integration so total hydrostatic force stays constant when `n_circumferential` or `n_radial` change.
+- Rework `solve_with_support_positions()` to recover reactions via DOF partitioning: solve `K_ff u_f = f_f`, then evaluate `r_c = K_cf u_f - f_c` using the nearest boundary node per support.
+- After each `node_merge`, rebuild the support mapping from the updated geometry so merged supports share a single constrained DOF and reaction entry.
+- Update the shell-aware load calculator to consume the new reaction vector directly (no manual sign flips) and continue projecting forces onto truss load nodes.
+- Add regression checks that log the total hydrostatic load and compare it against the summed reactions, warning when the mismatch exceeds a tolerance.

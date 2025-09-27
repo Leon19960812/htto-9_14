@@ -5,7 +5,8 @@ Date: 2025/9/3
 """
 import numpy as np
 import math
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple, Any
+from pathlib import Path
 from .shell_fea_2d import Shell2DFEA, ShellMaterialData
 
 class LoadCalculatorWithShell:
@@ -13,7 +14,8 @@ class LoadCalculatorWithShell:
         载荷计算器
     """
     
-    def __init__(self, material_data, enable_shell=True, shell_params=None, simple_mode: bool = False):
+    def __init__(self, material_data, enable_shell=True, shell_params=None,
+                 simple_mode: bool = False, filter_params: Optional[Dict[str, Any]] = None):
         """
         初始化载荷计算器
         
@@ -32,9 +34,29 @@ class LoadCalculatorWithShell:
         
         # 壳体FEA模块
         self.shell_fea = None
-        
+        self.debug_file: Optional[Path] = None
+        self._debug_prev_loads: Dict[int, Tuple[float, float]] = {}
+        self.current_load_vector: Optional[np.ndarray] = None
+        self._last_raw_load_vector: Optional[np.ndarray] = None
+        self._load_history: List[np.ndarray] = []
+        self.load_filter_config: Dict[str, Any] = {}
+        self.enable_fir_filter: bool = False
+        self.fir_window: int = 1
+        self.fir_min_history: int = 1
+        self._fir_base_weights: Optional[np.ndarray] = None
+
         if enable_shell and shell_params and not self.simple_mode:
             self._initialize_shell_fea(shell_params)
+
+        # 载荷滤波配置：优先使用 shell_params['load_filter']，可被显式参数覆盖
+        filter_cfg: Optional[Dict[str, Any]] = None
+        if isinstance(shell_params, dict):
+            filter_cfg = shell_params.get('load_filter') or shell_params.get('fir_filter')
+        if filter_params:
+            merged = dict(filter_cfg or {})
+            merged.update(filter_params)
+            filter_cfg = merged
+        self._init_filter(filter_cfg)
         
         print(f"LoadCalculator initialized:")
         mode_str = (
@@ -49,7 +71,7 @@ class LoadCalculatorWithShell:
             # 提取参数
             outer_radius = shell_params.get('outer_radius', 5.0)
             depth = shell_params.get('depth', 50.0)
-            thickness = shell_params.get('thickness', 0.01)
+            thickness = shell_params.get('thickness', 0.1)
             n_circumferential = shell_params.get('n_circumferential', 20)
             n_radial = shell_params.get('n_radial', 2)  # 改为2层，更薄
             
@@ -77,7 +99,93 @@ class LoadCalculatorWithShell:
             print(f"  [ERROR] Shell FEA initialization failed: {e}")
             self.shell_fea = None
             self.enable_shell = False
-    
+
+    def _init_filter(self, config: Optional[Dict[str, Any]]) -> None:
+        """Initialize or reset FIR smoothing configuration."""
+        self.load_filter_config = dict(config or {})
+        self._load_history = []
+        self._last_raw_load_vector = None
+        # 只有同时启用壳体、非 simple_mode 且配置标记为 enabled 时才激活滤波
+        enabled_flag = bool(self.load_filter_config.get('enabled', False))
+        self.enable_fir_filter = bool(enabled_flag and self.enable_shell and not self.simple_mode)
+        if not self.enable_fir_filter:
+            self.fir_window = 1
+            self.fir_min_history = 1
+            self._fir_base_weights = None
+            return
+
+        self.fir_window = max(2, int(self.load_filter_config.get('window', 5)))
+        self.fir_min_history = max(1, int(self.load_filter_config.get('min_history', 2)))
+        decay = float(self.load_filter_config.get('decay', 0.6))
+        raw_weights = self.load_filter_config.get('weights')
+
+        if raw_weights is not None:
+            base = np.asarray(raw_weights, dtype=float).ravel()
+            base = base[np.isfinite(base)]
+        else:
+            base = decay ** np.arange(self.fir_window, dtype=float)
+
+        if base.size == 0:
+            base = np.ones(self.fir_window, dtype=float)
+
+        if base.size < self.fir_window:
+            if raw_weights is None:
+                extra = decay ** np.arange(base.size, self.fir_window, dtype=float)
+                base = np.concatenate([base, extra])
+            else:
+                base = np.pad(base, (0, self.fir_window - base.size), mode='edge')
+
+        base = base[:self.fir_window]
+        s = float(np.sum(base))
+        if not np.isfinite(s) or s <= 0.0:
+            base = np.ones(self.fir_window, dtype=float)
+            s = float(self.fir_window)
+
+        self._fir_base_weights = base / s
+        self.fir_min_history = min(self.fir_min_history, self.fir_window)
+        print(
+            f"  FIR smoothing enabled: window={self.fir_window}, "
+            f"weights={np.round(self._fir_base_weights, 4)}"
+        )
+
+    def configure_filter(self, config: Optional[Dict[str, Any]]) -> None:
+        """Public helper to reconfigure FIR smoothing after construction."""
+        self._init_filter(config)
+
+    def _get_fir_weights(self, history_len: int) -> np.ndarray:
+        if self._fir_base_weights is None or self._fir_base_weights.size == 0:
+            weights = np.ones(history_len, dtype=float)
+            return weights / float(history_len)
+        base = self._fir_base_weights[:history_len]
+        if base.size < history_len:
+            pad_val = base[-1] if base.size else 1.0
+            base = np.pad(base, (0, history_len - base.size), constant_values=pad_val)
+        s = float(np.sum(base))
+        if not np.isfinite(s) or s <= 0.0:
+            base = np.ones(history_len, dtype=float)
+            s = float(history_len)
+        return base / s
+
+    def _apply_load_filter(self, load_vector: np.ndarray) -> np.ndarray:
+        if not self.enable_fir_filter:
+            return load_vector
+
+        if self._load_history and self._load_history[-1].shape != load_vector.shape:
+            self._load_history = []
+        self._load_history.append(load_vector.copy())
+        if len(self._load_history) > self.fir_window:
+            self._load_history.pop(0)
+
+        history_len = len(self._load_history)
+        if history_len < self.fir_min_history:
+            return self._load_history[-1]
+
+        weights = self._get_fir_weights(history_len)
+        filtered = np.zeros_like(load_vector, dtype=float)
+        for weight, vec in zip(weights, reversed(self._load_history)):
+            filtered += weight * vec
+        return filtered
+
     def compute_hydrostatic_loads(self, geometry, depth, radius, node_coords):
         """
         计算静水压力载荷
@@ -126,6 +234,12 @@ class LoadCalculatorWithShell:
             support_reactions = self.shell_fea.solve_with_support_positions(outer_node_coords)
             print(f"  [OK] Shell FEA completed")
             print(f"  Max reaction force: {np.max(np.abs(support_reactions)):.0f} N")
+            self._debug_log_support_state(
+                stage='compute_shell_based_loads',
+                support_positions=outer_node_coords,
+                support_reactions=support_reactions,
+                load_vector=None,
+            )
             
         except Exception as e:
             print(f"  [ERROR] Shell FEA failed: {e}")
@@ -143,23 +257,34 @@ class LoadCalculatorWithShell:
             else:
                 nx, ny = 0.0, -1.0
 
-            # 壳体对支撑的反力
+            # 壳体对支撑的反力（直接作用在桁架节点上）
             rx, ry = float(support_reactions[i, 0]), float(support_reactions[i, 1])
-            # 仅取反力在径向方向的分量大小（非负），忽略切向分量
-            mag_shell_on_support = max(0.0, rx * nx + ry * ny)
-            # 等效桁架所受力为相反方向（作用反作用），方向严格径向向内
-            fx = -mag_shell_on_support * nx
-            fy = -mag_shell_on_support * ny
-            load_vector[2*node_idx] = fx
-            load_vector[2*node_idx + 1] = fy
-        
+            fx = -rx
+            fy = -ry
+            load_vector[2 * node_idx] = fx
+            load_vector[2 * node_idx + 1] = fy
+
+        raw_vector = np.array(load_vector, copy=True)
+        self._last_raw_load_vector = raw_vector
+        filtered_vector = self._apply_load_filter(raw_vector)
+        self.current_load_vector = np.array(filtered_vector, copy=True)
+
+        self._debug_log_support_state(
+            stage='compute_shell_based_loads_filtered',
+            support_positions=outer_node_coords,
+            support_reactions=support_reactions,
+            load_vector=filtered_vector,
+            node_indices=geometry.load_nodes,
+            raw_load_vector=raw_vector,
+        )
+
         # 计算等效基础压力（用于兼容性）
         base_pressure = self.material_data.rho_water * self.material_data.g * depth
-        
+
         # 构建LoadData对象
         from .truss_system_initializer import LoadData
         return LoadData(
-            load_vector=load_vector,
+            load_vector=filtered_vector,
             base_pressure=base_pressure,
             depth=depth
         )
@@ -187,10 +312,10 @@ class LoadCalculatorWithShell:
         try:
             # 支撑位置直接使用桁架外圈节点坐标
             support_reactions = self.shell_fea.solve_with_support_positions(outer_node_coords)
-            
+            load_vector = np.zeros(len(coords) * 2)
+
             # 转换为载荷向量（方向强制为径向向内）
             outer_node_coords = coords[outer_nodes]
-            load_vector = np.zeros(len(coords) * 2)
             for i, node_idx in enumerate(outer_nodes):
                 px, py = outer_node_coords[i]
                 r = float(np.hypot(px, py))
@@ -199,13 +324,26 @@ class LoadCalculatorWithShell:
                 else:
                     nx, ny = 0.0, -1.0
                 rx, ry = float(support_reactions[i, 0]), float(support_reactions[i, 1])
-                mag_shell_on_support = max(0.0, rx * nx + ry * ny)
-                fx = -mag_shell_on_support * nx
-                fy = -mag_shell_on_support * ny
+                fx = -rx
+                fy = -ry
                 load_vector[2*node_idx] = fx
                 load_vector[2*node_idx + 1] = fy
-            
-            return load_vector
+
+            raw_vector = np.array(load_vector, copy=True)
+            self._last_raw_load_vector = raw_vector
+            filtered_vector = self._apply_load_filter(raw_vector)
+            self.current_load_vector = np.array(filtered_vector, copy=True)
+
+            self._debug_log_support_state(
+                stage='compute_shell_load_vector',
+                support_positions=outer_node_coords,
+                support_reactions=support_reactions,
+                load_vector=filtered_vector,
+                node_indices=outer_nodes,
+                raw_load_vector=raw_vector,
+            )
+
+            return filtered_vector
             
         except Exception as e:
             print(f"Shell load calculation failed: {e}")
@@ -240,16 +378,27 @@ class LoadCalculatorWithShell:
             load_vector[2 * nid] = F * nx
             load_vector[2 * nid + 1] = F * ny
 
+        raw_vector = np.array(load_vector, copy=True)
+        self._last_raw_load_vector = raw_vector
+        filtered_vector = self._apply_load_filter(raw_vector)
+        self.current_load_vector = np.array(filtered_vector, copy=True)
+
+        self._maybe_save_shell_displacement()
+
         from .truss_system_initializer import LoadData
         base_pressure = rho_g * float(depth)
-        return LoadData(load_vector=load_vector, base_pressure=base_pressure, depth=depth)
+        return LoadData(load_vector=filtered_vector, base_pressure=base_pressure, depth=depth)
 
     def _compute_simple_load_vector(self, node_coords, outer_nodes, depth):
         coords = np.asarray(node_coords, dtype=float)
         ln = list(outer_nodes)
         load_vector = np.zeros(coords.shape[0] * 2, dtype=float)
         if not ln:
-            return load_vector
+            raw_vector = np.array(load_vector, copy=True)
+            self._last_raw_load_vector = raw_vector
+            filtered_vector = self._apply_load_filter(raw_vector)
+            self.current_load_vector = np.array(filtered_vector, copy=True)
+            return filtered_vector
         rho_g = float(self.material_data.rho_water * self.material_data.g)
         for nid in ln:
             x, y = float(coords[nid, 0]), float(coords[nid, 1])
@@ -262,11 +411,19 @@ class LoadCalculatorWithShell:
                 nx, ny = 0.0, -1.0
             load_vector[2 * nid] = F * nx
             load_vector[2 * nid + 1] = F * ny
-        return load_vector
+        raw_vector = np.array(load_vector, copy=True)
+        self._last_raw_load_vector = raw_vector
+        filtered_vector = self._apply_load_filter(raw_vector)
+        self.current_load_vector = np.array(filtered_vector, copy=True)
+        return filtered_vector
 
     def _empty_load_data(self, depth):
         from .truss_system_initializer import LoadData
-        return LoadData(load_vector=np.zeros(0, dtype=float), base_pressure=float(self.material_data.rho_water * self.material_data.g * depth), depth=depth)
+        zero = np.zeros(0, dtype=float)
+        self._last_raw_load_vector = zero.copy()
+        self.current_load_vector = zero.copy()
+        self._load_history = []
+        return LoadData(load_vector=zero, base_pressure=float(self.material_data.rho_water * self.material_data.g * depth), depth=depth)
     
     def get_shell_info(self):
         """获取壳体信息（用于调试）"""
@@ -274,13 +431,84 @@ class LoadCalculatorWithShell:
             return self.shell_fea.get_mesh_info()
         else:
             return None
-    
+
     def visualize_shell(self):
         """可视化壳体网格"""
         if self.shell_fea:
             self.shell_fea.visualize_mesh()
         else:
             print("Shell FEA not initialized")
+
+    # ---------------------------
+    # Debug helpers
+    # ---------------------------
+
+    def enable_debug_logging(self, path: str = 'debug_shell_support.log', reset: bool = True) -> None:
+        """Enable detailed debug logging of shell support mapping/loads."""
+        p = Path(path)
+        if reset and p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        self.debug_file = p
+        header = (
+            "# Shell support debug log\n"
+            "# Columns: stage, point_index, node_id, x, y, r, nx, ny, "
+            "lamb_x, lamb_y, dot, load_x_filtered, load_y_filtered, load_x_raw, load_y_raw, "
+            "d_load_x, d_load_y, weights(list of node:weight pairs)\n"
+        )
+        self.debug_file.write_text(header, encoding='utf-8')
+        self._debug_prev_loads = {}
+
+    def _debug_log_support_state(self, stage: str, support_positions: np.ndarray,
+                                 support_reactions: np.ndarray,
+                                 load_vector: Optional[np.ndarray],
+                                 node_indices: Optional[List[int]] = None,
+                                 raw_load_vector: Optional[np.ndarray] = None) -> None:
+        if self.debug_file is None or support_positions is None or support_reactions is None:
+            return
+        try:
+            support_positions = np.asarray(support_positions, dtype=float)
+            support_reactions = np.asarray(support_reactions, dtype=float)
+            if node_indices is None:
+                node_indices = list(range(len(support_positions)))
+            weights = getattr(self.shell_fea, '_last_support_weights', [])
+            with self.debug_file.open('a', encoding='utf-8') as fh:
+                for i, node_idx in enumerate(node_indices):
+                    px, py = map(float, support_positions[i])
+                    rx = float(support_reactions[i, 0]) if support_reactions.ndim >= 2 else float(support_reactions[i])
+                    ry = float(support_reactions[i, 1]) if support_reactions.ndim >= 2 else 0.0
+                    r = float(np.hypot(px, py))
+                    if r > 1e-12:
+                        nx, ny = -px / r, -py / r
+                    else:
+                        nx, ny = 0.0, -1.0
+                    dot = rx * nx + ry * ny
+                    load_x = load_y = 0.0
+                    if load_vector is not None and 2 * node_idx + 1 < load_vector.size:
+                        load_x = float(load_vector[2 * node_idx])
+                        load_y = float(load_vector[2 * node_idx + 1])
+                    raw_x = raw_y = 0.0
+                    if raw_load_vector is not None and 2 * node_idx + 1 < raw_load_vector.size:
+                        raw_x = float(raw_load_vector[2 * node_idx])
+                        raw_y = float(raw_load_vector[2 * node_idx + 1])
+                    prev = self._debug_prev_loads.get(int(node_idx))
+                    d_load_x = load_x - prev[0] if (prev and load_vector is not None) else 0.0
+                    d_load_y = load_y - prev[1] if (prev and load_vector is not None) else 0.0
+                    if load_vector is not None:
+                        self._debug_prev_loads[int(node_idx)] = (load_x, load_y)
+                    weight_list = []
+                    if weights and i < len(weights):
+                        weight_list = [f"({nid}:{w:.6f})" for nid, w in weights[i]]
+                    fh.write(
+                        f"{stage},{i},{node_idx},{px:.6f},{py:.6f},{r:.6f},{nx:.6f},{ny:.6f},"
+                        f"{rx:.6f},{ry:.6f},{dot:.6f},{load_x:.6f},{load_y:.6f},{raw_x:.6f},{raw_y:.6f},"
+                        f"{d_load_x:.6f},{d_load_y:.6f},[{';'.join(weight_list)}]\n"
+                    )
+        except Exception as exc:
+            # Debug logging failures must not break primary workflow.
+            print(f"[debug] Failed to log shell support state: {exc}")
 
 
 def integrate_shell_into_existing_system():
@@ -312,7 +540,7 @@ def integrate_shell_into_existing_system():
     shell_params = {
         'outer_radius': initializer.radius,
         'depth': initializer.depth,
-        'thickness': 0.01,  # 1cm厚度
+        'thickness': 0.1,  # 1cm厚度
         'n_circumferential': len(getattr(initializer, 'load_nodes', initializer.outer_nodes)),  # 与桁架节点对应
         'n_radial': 2,  # 薄壳，只要2层
         'E_shell': 210e9  # 210 GPa，比桁架刚度大

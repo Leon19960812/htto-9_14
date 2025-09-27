@@ -9,6 +9,7 @@ from typing import Optional, Tuple, List, Dict, Set
 import json
 import csv
 import os
+from pathlib import Path
 
 # 抑制libpng警告
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -37,7 +38,9 @@ class SequentialConvexTrussOptimizer:
                  polar_rings: 'Optional[list]' = None,
                  simple_loads: bool = False,
                  enforce_symmetry: bool = False,
-                 enable_symmetry_repair: bool = False):
+                 enable_symmetry_repair: bool = False,
+                 shell_fig_dir: Optional[Path] = None,
+                 save_shell_iter: bool = False):
         """初始化优化器"""
         print("Initializing SCP...")
         
@@ -65,10 +68,39 @@ class SequentialConvexTrussOptimizer:
             polar_config=polar_config if polar_config is not None else {},
             simple_loads=bool(simple_loads),
         )
-        
+        if shell_fig_dir is not None and save_shell_iter:
+            load_calc_init = getattr(self.initializer, 'load_calc', None)
+            if load_calc_init is not None and hasattr(load_calc_init, 'figure_output_dir'):
+                load_calc_init.figure_output_dir = shell_fig_dir
+
         # 2. 从初始化器获取所有必要属性
         self.__dict__.update(self.initializer.__dict__)
-        
+        self._save_shell_iter = bool(save_shell_iter)
+        self._shell_fig_dir: Optional[Path] = shell_fig_dir if self._save_shell_iter else None
+        if getattr(self, 'load_calc', None) is not None:
+            if hasattr(self.load_calc, 'figure_output_dir'):
+                self.load_calc.figure_output_dir = self._shell_fig_dir
+            if hasattr(self.load_calc, 'current_iteration'):
+                self.load_calc.current_iteration = None
+
+        # 载荷滤波配置：默认在启用壳体载荷时打开 FIR 平滑
+        enabled_filter = bool(
+            getattr(self, 'load_calc', None)
+            and getattr(self.load_calc, 'enable_shell', False)
+            and not getattr(self, 'use_simple_loads', False)
+        )
+        self.load_filter_config: Dict[str, float] = {
+            'enabled': enabled_filter,
+            'window': 5,
+            'decay': 0.6,
+            'min_history': 2,
+        }
+        if getattr(self, 'load_calc', None) and hasattr(self.load_calc, 'configure_filter'):
+            try:
+                self.load_calc.configure_filter(self.load_filter_config)
+            except Exception as exc:
+                print(f"Warning: failed to configure load filter: {exc}")
+
         # 4. 设置优化参数
         self._setup_optimization_params()
         
@@ -205,6 +237,9 @@ class SequentialConvexTrussOptimizer:
         self.symmetry_member_fixed = []
         self.area_symmetry_active = False
         self.symmetry_active = False
+        # Load-freezing support
+        self.frozen_load_vector = None
+        self._use_frozen_load = False
 
     def _update_theta_move_caps(self, theta_len: int):
         """Compute per-node move caps based on incident shortest member length.
@@ -1004,11 +1039,39 @@ class SequentialConvexTrussOptimizer:
                     A_k = A_new
 
                     old_compliance = self.current_compliance
-                    self.current_compliance = self.system_calculator.compute_actual_compliance(theta_new, A_new)
-                    
+                    pending_quality = getattr(self, '_pending_quality', None)
+                    blended_load = None
+                    used_cached = False
+                    if isinstance(pending_quality, dict):
+                        try:
+                            theta_cached = np.asarray(pending_quality.get('theta', []), dtype=float)
+                            A_cached = np.asarray(pending_quality.get('A', []), dtype=float)
+                            if (theta_cached.shape == theta_new.shape and A_cached.shape == A_new.shape
+                                    and np.allclose(theta_cached, theta_new)
+                                    and np.allclose(A_cached, A_new)):
+                                self.current_compliance = float(pending_quality.get('actual', old_compliance))
+                                blended_load = pending_quality.get('blended_load', None)
+                                used_cached = True
+                        except Exception:
+                            used_cached = False
+                    if not used_cached:
+                        self._use_frozen_load = False
+                        self.current_compliance = self.system_calculator.compute_actual_compliance(theta_new, A_new)
+                    else:
+                        self._use_frozen_load = False
+                    if blended_load is not None:
+                        try:
+                            self.frozen_load_vector = np.asarray(blended_load, dtype=float).copy()
+                        except Exception:
+                            pass
+                    try:
+                        self._pending_quality = None
+                    except Exception:
+                        pass
+
                     improvement = (old_compliance - self.current_compliance) / old_compliance * 100
                     success_count += 1
-                    
+
                     print(f"   Accepted step (success #{success_count})")
                     print(f"   Compliance: {old_compliance:.6e} → {self.current_compliance:.6e}")
                     print(f"   Improvement: {improvement:.2f}%")
@@ -1196,6 +1259,10 @@ class SequentialConvexTrussOptimizer:
                 else:
                     print("❌ Rejected step")
                     print(f"   Keeping current solution; compliance: {self.current_compliance:.6e}")
+                    try:
+                        self._pending_quality = None
+                    except Exception:
+                        pass
                     # 回写拒绝标记到最后一个 step_detail
                     if hasattr(self, 'step_details') and self.step_details:
                         self.step_details[-1]['accepted'] = False
@@ -1438,7 +1505,18 @@ class SequentialConvexTrussOptimizer:
     def _compute_load_vector(self, node_coords: np.ndarray) -> np.ndarray:
         """计算载荷向量 - 使用壳体FEA动态计算"""
         # 统一通过 load_calc 接口调用，避免重复计算
-        return self.load_calc.compute_load_vector(node_coords, self.geometry.load_nodes, self.depth)
+        if hasattr(self.load_calc, 'current_iteration'):
+            try:
+                self.load_calc.current_iteration = self.iteration_count
+            except Exception:
+                pass
+        if hasattr(self.load_calc, 'figure_output_dir'):
+            try:
+                self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
+            except Exception:
+                pass
+        load_vec = self.load_calc.compute_load_vector(node_coords, self.geometry.load_nodes, self.depth)
+        return load_vec
     
     def _clear_linearization_cache(self):
         """清除线性化缓存，强制重线性化"""
@@ -1467,14 +1545,9 @@ class SequentialConvexTrussOptimizer:
         """重新初始化载荷计算器（节点融合后需要更新Shell FEA网格）"""
         try:
             from .load_calculator_with_shell import LoadCalculatorWithShell
-            shell_params = {
-                'outer_radius': self.radius,
-                'depth': self.depth,
-                'thickness': 0.01,
-                'n_circumferential': 20,  # 使用固定的20个周向网格
-                'n_radial': 4,  # 使用固定的2个径向网格
-                'E_shell': self.material_data.E_steel * 1000
-            }
+            shell_params = dict(getattr(self, 'shell_params', {}) or {})
+            shell_params['outer_radius'] = self.radius
+            shell_params['depth'] = self.depth
             simple_mode = bool(getattr(self, 'use_simple_loads', False))
             self.load_calc = LoadCalculatorWithShell(
                 material_data=self.material_data,
@@ -1482,6 +1555,16 @@ class SequentialConvexTrussOptimizer:
                 shell_params=shell_params,
                 simple_mode=simple_mode,
             )
+            self.shell_params = shell_params
+            if hasattr(self.load_calc, 'figure_output_dir'):
+                self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
+            if hasattr(self.load_calc, 'current_iteration'):
+                self.load_calc.current_iteration = self.iteration_count
+            if hasattr(self.load_calc, 'configure_filter'):
+                try:
+                    self.load_calc.configure_filter(self.load_filter_config)
+                except Exception as exc:
+                    print(f" load filter reconfiguration failed: {exc}")
             print(" reinitialized load calculator with shell FEA.")
         except Exception as e:
             print(f"reinitialization failed: {e}")
@@ -1547,6 +1630,22 @@ class SequentialConvexTrussOptimizer:
         if area_arr is not None:
             for eid, val in enumerate(area_arr):
                 self.area_history_records.append((int(iteration), int(eid), float(val)))
+
+    def _save_shell_displacement(self) -> None:
+        shell_dir = getattr(self, '_shell_fig_dir', None)
+        if not shell_dir:
+            return
+        shell = getattr(getattr(self, 'load_calc', None), 'shell_fea', None)
+        if shell is None or not hasattr(shell, 'visualize_last_solution'):
+            return
+        try:
+            path = Path(shell_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            iter_idx = max(0, int(getattr(self, 'iteration_count', 0)))
+            fname = path / f"shell_disp_iter_{iter_idx:03d}.png"
+            shell.visualize_last_solution(scale=None, save_path=str(fname))
+        except Exception as exc:
+            print(f"Warning: failed to save shell displacement figure: {exc}")
 
 
     def _export_iteration_state_logs(self, export_dir: str = 'results') -> None:

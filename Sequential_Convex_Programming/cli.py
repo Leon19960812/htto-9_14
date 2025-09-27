@@ -30,6 +30,8 @@ def parse_args(argv=None):
     p.add_argument('--sdp-verbose', action='store_true', help='Enable solver verbose for single fixed-geometry SDP')
     p.add_argument('--simple-loads', action='store_true', help='Use simple hydrostatic loads at load nodes (radial in), bypass shell FEA')
     p.add_argument('--enforce-symmetry', action='store_true', help='Enforce mirror symmetry constraints on theta variables')
+    p.add_argument('--save-shell-iter', action='store_true', help='Save shell displacement figure for each accepted iteration')
+    p.add_argument('--shell-debug-log', type=str, default=None, help='Optional path to log shell support mapping/loading diagnostics')
     return p.parse_args(argv)
 
 
@@ -56,6 +58,8 @@ def main(argv=None):
     rings = load_rings(args.rings, args.radius, args.n_sectors, args.inner_ratio,
                        args.enable_middle_layer, args.middle_layer_ratio)
 
+    shell_fig_dir = Path(args.save_figs) / "shell_displacement_iter" if args.save_figs else None
+
     opt = SequentialConvexTrussOptimizer(
         radius=args.radius,
         n_sectors=args.n_sectors,
@@ -67,8 +71,19 @@ def main(argv=None):
         enable_aasi=args.enable_aasi,
         polar_rings=rings,
         simple_loads=bool(args.simple_loads),
-        enforce_symmetry=bool(args.enforce_symmetry)
+        enforce_symmetry=bool(args.enforce_symmetry),
+        shell_fig_dir=shell_fig_dir if args.save_shell_iter else None,
+        save_shell_iter=bool(args.save_shell_iter),
     )
+
+    if args.shell_debug_log and getattr(opt, 'load_calc', None) is not None:
+        enable_log = getattr(opt.load_calc, 'enable_debug_logging', None)
+        if callable(enable_log):
+            try:
+                enable_log(args.shell_debug_log)
+                print(f"Shell debug logging enabled: {args.shell_debug_log}")
+            except Exception as exc:
+                print(f"Warning: failed to enable shell debug logging: {exc}")
     opt.optimization_params.max_iterations = int(args.max_iterations)
     # Optionally save pre-optimization ground structure (baseline)
     pre_out = None
@@ -156,6 +171,15 @@ def main(argv=None):
                 print(f"Warning: failed saving figures for single subproblem: {e}")
         return 0
     
+    if args.save_figs:
+        shell_iter_dir = shell_fig_dir
+        if shell_iter_dir is not None and args.save_shell_iter:
+            try:
+                shell_iter_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            print(f"[cli] shell displacement directory set to {shell_iter_dir}")
+
     optimization_failed = False
     failure_exc = None
     try:
@@ -230,6 +254,15 @@ def main(argv=None):
             # Load distribution
             viz.plot_single_figure(opt, figure_type="load_distribution",
                                    save_path=os.path.join(out_dir, "load_distribution.png"), figsize=(8, 6))
+
+            # Shell displacement visualization (if shell FEA is active)
+            shell_fea = getattr(getattr(opt, 'load_calc', None), 'shell_fea', None)
+            if shell_fea and hasattr(shell_fea, 'visualize_last_solution'):
+                try:
+                    shell_fig = os.path.join(out_dir, "shell_displacement.png")
+                    shell_fea.visualize_last_solution(scale=None, save_path=shell_fig)
+                except Exception as e:
+                    print(f"Warning: shell displacement plot failed: {e}")
 
             # Area histogram
             viz.plot_single_figure(opt, figure_type="area_histogram",

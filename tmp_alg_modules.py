@@ -45,7 +45,7 @@ class OptimizationParams:
     """Optimization configuration."""
 
     max_iterations: int = 30
-    convergence_tol: float = 1e-3
+    convergence_tol: float = 1e-4
     gradient_fd_step: float = 1e-5
 
 
@@ -129,7 +129,6 @@ class GradientCalculator:
 
     def __init__(self, optimizer_ref):
         self.opt = optimizer_ref
-
         self.fd_step = OptimizationParams().gradient_fd_step
 
     def compute_gradients(self, theta: np.ndarray) -> Tuple[List, List]:
@@ -148,25 +147,11 @@ class SystemCalculator:
     def __init__(self, optimizer_ref):
         self.opt = optimizer_ref
 
-    def compute_actual_compliance(
-        self,
-        theta: np.ndarray,
-        A: np.ndarray,
-        load_override: Optional[np.ndarray] = None,
-        update_frozen: bool = True,
-    ) -> float:
+    def compute_actual_compliance(self, theta: np.ndarray, A: np.ndarray) -> float:
         """Compute compliance = f_red^T * u_red using current geometry and areas.
 
-        Parameters
-        ----------
-        theta, A
-            Candidate design variables.
-        load_override
-            Optional load vector to use directly. When provided, the load is
-            assumed to already live on the full DOF space.
-        update_frozen
-            If ``True`` (default) the load used for the solve is cached as the
-            new frozen load for subsequent evaluations.
+        Coordinates are obtained via the optimizer adapter to allow a future
+        switch to PolarGeometry without changing this call-site.
         """
         # Update coordinates from theta using optimizer adapter
         coords = self.opt._update_node_coordinates(theta)
@@ -174,48 +159,35 @@ class SystemCalculator:
         lengths, directions = self.opt.geometry_calc.compute_element_geometry(
             coords, self.opt.geometry.elements
         )
-        # Global stiffness
+        # Global stiffness and load
         K = self.opt.stiffness_calc.assemble_global_stiffness(
             self.opt.geometry, A, lengths, directions
         )
-
+        # Decide whether to reuse frozen load vector
+        use_frozen = bool(getattr(self.opt, '_use_frozen_load', False))
+        frozen_vec = getattr(self.opt, 'frozen_load_vector', None)
         f = None
-        if load_override is not None:
+        if use_frozen and frozen_vec is not None:
             try:
-                f = np.asarray(load_override, dtype=float)
-            except Exception as exc:
-                raise ValueError('Failed to convert load_override to ndarray') from exc
-        else:
-            # Decide whether to reuse frozen load vector
-            use_frozen = bool(getattr(self.opt, '_use_frozen_load', False))
-            frozen_vec = getattr(self.opt, 'frozen_load_vector', None)
-            if use_frozen and frozen_vec is not None:
-                try:
-                    f = np.asarray(frozen_vec, dtype=float)
-                    if f.size != self.opt.geometry.n_dof:
-                        f = None  # fallback to recompute if dimension mismatch
-                    else:
-                        f = f.copy()
-                except Exception:
-                    f = None
-
-            if f is None:
-                load_nodes = getattr(self.opt.geometry, 'load_nodes', [])
-                f = self.opt.load_calc.compute_load_vector(coords, load_nodes, self.opt.depth)
-                f = np.asarray(f, dtype=float)
+                f = np.asarray(frozen_vec, dtype=float)
+                if f.size != self.opt.geometry.n_dof:
+                    f = None  # fallback to recompute if dimension mismatch
+                else:
+                    f = f.copy()
+            except Exception:
+                f = None
 
         if f is None:
-            raise ValueError('Load vector could not be constructed for compliance evaluation')
-
-        if f.size != self.opt.geometry.n_dof:
-            raise ValueError(f"Load vector size mismatch: expected {self.opt.geometry.n_dof}, got {f.size}")
-
-        if update_frozen:
+            load_nodes = getattr(self.opt.geometry, 'load_nodes', [])
+            f = self.opt.load_calc.compute_load_vector(coords, load_nodes, self.opt.depth)
+            f = np.asarray(f, dtype=float)
             try:
                 self.opt.frozen_load_vector = f.copy()
             except Exception:
                 pass
 
+        if f.size != self.opt.geometry.n_dof:
+            raise ValueError(f"Load vector size mismatch: expected {self.opt.geometry.n_dof}, got {f.size}")
         # Reduce by free DOFs
         Kff = K[np.ix_(self.opt.free_dofs, self.opt.free_dofs)]
         ff = f[self.opt.free_dofs]
@@ -254,104 +226,26 @@ class StepQualityEvaluator:
         predicted_from_model: Optional[float] = None,
     ) -> float:
         current = float(self.opt.current_compliance)
-
-        cfg = getattr(self.opt, 'load_continuation_config', None) or {}
-        steps = max(1, int(cfg.get('steps', 4)))
-        alpha_cap = float(cfg.get('alpha_max', 0.9))
-        gamma = float(cfg.get('gamma', 0.7))
-        stop_tol = float(cfg.get('stopping_tol', 1e-3))
-
-        load_nodes = getattr(self.opt.geometry, 'load_nodes', [])
-        coords_new = self.opt._update_node_coordinates(theta_new)
-        load_new = np.asarray(
-            self.opt.load_calc.compute_load_vector(coords_new, load_nodes, self.opt.depth),
-            dtype=float,
-        )
-
-        frozen_old = getattr(self.opt, 'frozen_load_vector', None)
-        if frozen_old is None:
-            coords_old = self.opt._update_node_coordinates(theta_old)
-            frozen_old = self.opt.load_calc.compute_load_vector(coords_old, load_nodes, self.opt.depth)
-        load_old = np.asarray(frozen_old, dtype=float)
-
-        size_mismatch = load_old.size != load_new.size
-        if size_mismatch:
-            steps = 1
-
-        blended = load_new.copy() if size_mismatch else load_old.copy()
-        actual = None
-        prev_comp = None
-        used_steps = 0
-
-        for j in range(steps):
-            if steps == 1:
-                alpha = 1.0
-            else:
-                convex = 1.0 - (1.0 - alpha_cap) * (gamma ** (j + 1))
-                linear = (j + 1) / steps
-                alpha = max(0.0, min(1.0, max(convex, linear)))
-                if j == steps - 1:
-                    alpha = 1.0
-            blended = (1.0 - alpha) * blended + alpha * load_new
-            actual = float(
-                self.opt.system_calculator.compute_actual_compliance(
-                    theta_new, A_new, load_override=blended, update_frozen=False
-                )
-            )
-            used_steps += 1
-
-            if prev_comp is not None:
-                denom = max(abs(prev_comp), 1.0)
-                if abs(actual - prev_comp) / denom < stop_tol:
-                    break
-            prev_comp = actual
-
-        if actual is None:
-            blended = load_new.copy()
-            actual = float(
-                self.opt.system_calculator.compute_actual_compliance(
-                    theta_new, A_new, load_override=blended, update_frozen=False
-                )
-            )
-            used_steps = 1
-
+        use_frozen_prev = getattr(self.opt, '_use_frozen_load', False)
+        try:
+            self.opt._use_frozen_load = True
+            actual = float(self.opt.system_calculator.compute_actual_compliance(theta_new, A_new))
+        finally:
+            self.opt._use_frozen_load = use_frozen_prev
         if predicted_from_model is None:
+            # Minimal fallback: use actual as predicted to avoid division issues.
             predicted = actual
         else:
             predicted = float(predicted_from_model)
-
-        print(
-            f"[StepQuality] actual_compliance={actual:.6e} predicted_compliance={predicted:.6e}"
-        )
+        print(f"[StepQuality] actual_compliance={actual:.6e} predicted_compliance={predicted:.6e}")
         if not (np.isfinite(actual) and np.isfinite(predicted)):
-            print(
-                f"[StepQuality] non-finite compliance detected: actual={actual}, predicted={predicted}"
-            )
-
-        pending = {
-            'theta': np.asarray(theta_new, dtype=float).copy(),
-            'A': np.asarray(A_new, dtype=float).copy(),
-            'actual': float(actual),
-            'predicted': float(predicted),
-            'blended_load': blended.copy(),
-            'continuation_steps': used_steps,
-        }
-        try:
-            self.opt._pending_quality = pending
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self.opt, 'step_details') and self.opt.step_details:
-                self.opt.step_details[-1]['actual_compliance'] = float(actual)
-                self.opt.step_details[-1]['predicted_compliance'] = float(predicted)
-                self.opt.step_details[-1]['continuation_steps'] = used_steps
-        except Exception:
-            pass
+            print(f"[StepQuality] non-finite compliance detected: actual={actual}, predicted={predicted}")
 
         actual_reduction = current - actual
         predicted_reduction = current - predicted
 
+        # Guard: if模型预测本身就是“变差”（或无法给出下降），直接判定为劣质步长
+        # 返回 -inf 让信赖域机制拒绝该步
         if predicted_reduction <= 0.0 or not np.isfinite(predicted_reduction):
             print(f"[StepQuality] invalid predicted reduction: {predicted_reduction}")
             return float('-inf')
@@ -359,9 +253,6 @@ class StepQualityEvaluator:
         if abs(predicted_reduction) < 1e-16:
             return 1.0 if actual_reduction >= 0.0 else -1.0
         return float(actual_reduction / predicted_reduction)
-
-
-
 
 
 # ==========================
@@ -763,3 +654,4 @@ class SubproblemSolver:
             if theta[i] < min_allowed:
                 theta[i] = min_allowed
         return theta
+
