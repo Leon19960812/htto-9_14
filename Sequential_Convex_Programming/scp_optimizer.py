@@ -879,7 +879,9 @@ class SequentialConvexTrussOptimizer:
                 
                 # 缓存梯度信息用于预测柔度计算
                 try:
-                    grad_theta, grad_A = self.subproblem_solver.gradient_calc.compute_gradients(theta_k)
+                    grad_theta, grad_A = self.subproblem_solver.gradient_calc.compute_gradients(
+                        theta_k, A_k
+                    )
                     
                     # 验证梯度有效性
                     if grad_theta is None or grad_A is None:

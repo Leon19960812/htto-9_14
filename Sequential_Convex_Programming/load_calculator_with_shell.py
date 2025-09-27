@@ -424,7 +424,31 @@ class LoadCalculatorWithShell:
         self.current_load_vector = zero.copy()
         self._load_history = []
         return LoadData(load_vector=zero, base_pressure=float(self.material_data.rho_water * self.material_data.g * depth), depth=depth)
-    
+
+    # ------------------------------------------------------------------
+    # Shell displacement snapshots
+    # ------------------------------------------------------------------
+    def _maybe_save_shell_displacement(self) -> None:
+        """Save shell displacement figure when shell FEA data is available."""
+        if self.simple_mode or not self.enable_shell:
+            return
+        shell = getattr(self, 'shell_fea', None)
+        if shell is None or not hasattr(shell, 'visualize_last_solution'):
+            return
+
+        out_dir = getattr(self, 'figure_output_dir', None)
+        if not out_dir:
+            return
+
+        try:
+            path = Path(out_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            iteration = int(getattr(self, 'current_iteration', 0) or 0)
+            fname = path / f"shell_disp_iter_{iteration:03d}.png"
+            shell.visualize_last_solution(scale=None, save_path=str(fname))
+        except Exception as exc:
+            print(f"Warning: failed to save shell displacement snapshot: {exc}")
+
     def get_shell_info(self):
         """获取壳体信息（用于调试）"""
         if self.shell_fea:
