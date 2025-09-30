@@ -73,6 +73,8 @@ class Shell2DFEA:
         self.sigma_factor = float(sigma_factor)
         self.adaptive_sigma = bool(adaptive_sigma)
         self.epsilon_weight = float(epsilon_weight)
+        # softmax 温度系数（与 sigma_factor 一致，便于逐步替换）
+        self.softmax_tau_factor = float(sigma_factor)
 
         # 生成网格和预计算
         self._generate_shell_mesh()
@@ -86,6 +88,10 @@ class Shell2DFEA:
         self._last_reactions: Optional[np.ndarray] = None
         self._last_support_positions: Optional[np.ndarray] = None
         self._last_support_weights = None
+        self._last_support_softmax: Optional[List[dict]] = None
+        self._last_aug_matrix: Optional[np.ndarray] = None
+        self._last_support_matrix: Optional[np.ndarray] = None
+        self._last_rhs: Optional[np.ndarray] = None
 
         print(f"Shell2DFEA initialized:")
         print(f"  Outer radius: {outer_radius}m")
@@ -309,6 +315,10 @@ class Shell2DFEA:
         b = np.zeros(n_dof + m)
         b[:n_dof] = self.pressure_loads
 
+        self._last_support_matrix = C.copy()
+        self._last_aug_matrix = A.copy()
+        self._last_rhs = b.copy()
+
         try:
             sol = np.linalg.solve(A, b)
         except np.linalg.LinAlgError:
@@ -335,6 +345,98 @@ class Shell2DFEA:
             print(f"  [warn] Reaction imbalance |Δ|={imbalance_norm:.2e} N")
 
         return reactions
+
+    def get_last_support_weight_gradients(self) -> Optional[List[dict]]:
+        """Return cached softmax weights and their spatial derivatives for each support.
+
+        每个元素包含：
+            - node_indices: 边界节点索引
+            - weights: 对应 softmax 权重
+            - dw_dx/dw_dy: 权重对支撑位置 x,y 的导数
+            - dtheta_dx/dtheta_dy: 角度对坐标的导数（便于额外链式求导）
+        若尚未进行求解，则返回 None。
+        """
+
+        if not self._last_support_softmax:
+            return None
+
+        boundary_nodes = np.asarray(self.mesh.boundary_nodes, dtype=int)
+        gradients: List[dict] = []
+        for cache in self._last_support_softmax:
+            gradients.append({
+                "node_indices": boundary_nodes.copy(),
+                "weights": np.asarray(cache["weights"], dtype=float).copy(),
+                "dw_dtheta": np.asarray(cache["dw_dtheta"], dtype=float).copy(),
+                "dw_dx": np.asarray(cache["dw_dx"], dtype=float).copy(),
+                "dw_dy": np.asarray(cache["dw_dy"], dtype=float).copy(),
+                "dtheta_dx": float(cache["dtheta_dx"]),
+                "dtheta_dy": float(cache["dtheta_dy"]),
+                "tau": float(cache["tau"]),
+                "theta": float(cache["support_theta"]),
+            })
+
+        return gradients
+
+    def solve_augmented_system(self, rhs: np.ndarray) -> np.ndarray:
+        """Solve the cached augmented system for a new right-hand side.
+
+        若尚未调用 `solve_with_support_positions`，则抛出异常。
+        当线性系统奇异时回退到伪逆求解。
+        """
+
+        if self._last_aug_matrix is None:
+            raise RuntimeError("Augmented system is not initialized; call solve_with_support_positions first.")
+
+        A = self._last_aug_matrix
+        rhs = np.asarray(rhs, dtype=float)
+        if rhs.shape[0] != A.shape[0]:
+            raise ValueError("Right-hand side dimension does not match augmented system.")
+
+        try:
+            return np.linalg.solve(A, rhs)
+        except np.linalg.LinAlgError:
+            return np.linalg.pinv(A) @ rhs
+
+    def build_support_constraint_derivative(self, support_index: int, axis: str) -> np.ndarray:
+        """Construct ∂C/∂p for the given support index and coordinate axis ('x' or 'y')."""
+
+        if self._last_support_matrix is None:
+            raise RuntimeError("Support matrix is unavailable; solve the shell system first.")
+
+        gradients = self.get_last_support_weight_gradients()
+        if gradients is None or support_index >= len(gradients):
+            raise IndexError("Support index out of range for derivative construction.")
+
+        axis = axis.lower()
+        if axis not in ("x", "y"):
+            raise ValueError("Axis must be 'x' or 'y'.")
+
+        jac_row = gradients[support_index]["dw_dx" if axis == "x" else "dw_dy"]
+        node_indices = gradients[support_index]["node_indices"]
+        dC = np.zeros_like(self._last_support_matrix, dtype=float)
+        row0 = 2 * support_index
+        row1 = row0 + 1
+        for idx, weight_grad in zip(node_indices, jac_row):
+            idx = int(idx)
+            dC[row0, 2 * idx] += float(weight_grad)
+            dC[row1, 2 * idx + 1] += float(weight_grad)
+        return dC
+
+    def get_last_solution(self) -> Optional[dict]:
+        """Return cached (u, λ, C, A) for reuse in sensitivity calculations."""
+
+        if self._last_displacement is None or self._last_support_matrix is None:
+            return None
+        lambda_vec = None
+        if self._last_reactions is not None:
+            lambda_vec = (-np.asarray(self._last_reactions, dtype=float)).reshape(-1)
+        return {
+            "u": None if self._last_displacement is None else self._last_displacement.reshape(-1).copy(),
+            "lambda": lambda_vec,
+            "C": self._last_support_matrix.copy(),
+            "A": None if self._last_aug_matrix is None else self._last_aug_matrix.copy(),
+            "rhs": None if self._last_rhs is None else self._last_rhs.copy(),
+        }
 
     def visualize_last_solution(self, scale: Optional[float] = None,
                                 save_path: Optional[str] = None,
@@ -461,37 +563,85 @@ class Shell2DFEA:
             print("Matplotlib not available for visualization")
 
     def _compute_support_weights(self, support_positions: np.ndarray) -> List[List[Tuple[int, float]]]:
-        """Gaussian-weighted mapping from support positions to boundary nodes."""
+        """Softmax-based mapping from support positions to boundary nodes.
+
+        通过 softmax(-Δθ^2 / τ) 构造连续可导的支撑权重。
+        返回值保持与旧接口兼容，同时缓存 softmax 中间量供灵敏度使用。
+        """
         weights_all: List[List[Tuple[int, float]]] = []
         boundary_nodes = np.asarray(self.mesh.boundary_nodes, dtype=int)
         if boundary_nodes.size == 0:
+            self._last_support_softmax = []
             return weights_all
+
         theta_b = self.boundary_angles
+        # 基础角度步长，用于设定 softmax 温度
         dtheta = math.pi / max(self.n_circumferential - 1, 1)
-        k_use = max(3, min(self.k_neighbors, boundary_nodes.size))
+        tau_base = max(1e-8, self.softmax_tau_factor * dtheta)
+
+        boundary_angles = theta_b
+        softmax_cache = []
         for pos in support_positions:
             x, y = float(pos[0]), float(pos[1])
             theta = math.atan2(y, x)
             theta = min(max(theta, 0.0), math.pi)
-            d_all = np.abs(theta - theta_b)
-            idx_sorted = np.argsort(d_all)[:k_use]
-            local_angles = d_all[idx_sorted]
-            if self.adaptive_sigma and local_angles.size > 0:
-                W = float(np.max(local_angles))
-                eps = max(1e-6, min(0.2, self.epsilon_weight))
-                sigma = W / math.sqrt(2.0 * math.log(1.0 / eps)) if W > 0 else (self.sigma_factor * dtheta)
+
+            diff = theta - boundary_angles
+            # softmax logits 依据平方项构建
+            delta = diff
+
+            if self.adaptive_sigma:
+                # 自适应温度：兼顾局部跨度与基线
+                span = float(np.max(np.abs(diff))) if diff.size else 0.0
+                tau = max(tau_base, self.sigma_factor * max(span, dtheta) / max(1.0, math.sqrt(2.0)))
             else:
-                sigma = max(1e-12, self.sigma_factor * dtheta)
-            exparg = -0.5 * (local_angles / sigma) ** 2
-            exparg -= float(np.max(exparg))
-            w_raw = np.exp(exparg)
-            s = float(np.sum(w_raw))
-            if not np.isfinite(s) or s <= 0:
-                w = np.full_like(w_raw, 1.0 / max(1, len(w_raw)))
+                tau = tau_base
+
+            inv_tau = 1.0 / tau if tau > 0 else 0.0
+            logits = -0.5 * (diff * inv_tau) ** 2
+            logits -= float(np.max(logits))
+            exp_logits = np.exp(logits)
+            sum_exp = float(np.sum(exp_logits))
+            if not np.isfinite(sum_exp) or sum_exp <= 0.0:
+                weights = np.full_like(exp_logits, 1.0 / max(1, exp_logits.size))
             else:
-                w = w_raw / s
-            weights = [(int(boundary_nodes[idx_sorted[j]]), float(w[j])) for j in range(len(idx_sorted))]
-            weights_all.append(weights)
+                weights = exp_logits / sum_exp
+
+            weights_all.append([
+                (int(boundary_nodes[i]), float(weights[i])) for i in range(boundary_nodes.size)
+            ])
+
+            grad_logits = -(diff) * (inv_tau ** 2)
+            # softmax梯度：dw/dtheta = w * (g_j - sum_k w_k g_k)
+            mean_grad = float(np.dot(weights, grad_logits))
+            dw_dtheta = weights * (grad_logits - mean_grad)
+
+            r2 = float(x * x + y * y)
+            if r2 <= 1e-12:
+                dtheta_dx = 0.0
+                dtheta_dy = 0.0
+            else:
+                dtheta_dx = -y / r2
+                dtheta_dy = x / r2
+
+            dw_dx = dw_dtheta * dtheta_dx
+            dw_dy = dw_dtheta * dtheta_dy
+
+            softmax_cache.append({
+                "support_theta": theta,
+                "diff": diff,
+                "tau": tau,
+                "logits": logits,
+                "weights": weights,
+                "grad_logits": grad_logits,
+                "dw_dtheta": dw_dtheta,
+                "dw_dx": dw_dx,
+                "dw_dy": dw_dy,
+                "dtheta_dx": dtheta_dx,
+                "dtheta_dy": dtheta_dy,
+            })
+
+        self._last_support_softmax = softmax_cache
         return weights_all
 
     def _build_support_constraint_matrix(self, support_weights: List[List[Tuple[int, float]]]) -> np.ndarray:

@@ -9,6 +9,7 @@ ground structure generation. Comments are in English; UTF-8 + LF.
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import numpy as np
+import math
 
 
 # ==========================
@@ -269,7 +270,7 @@ class TrussSystemInitializer:
                 "outer_radius": self.radius,
                 "depth": self.depth,
                 "thickness": 0.15,
-                "n_circumferential": 30,
+                "n_circumferential": int(math.ceil(2 * (self.n_sectors + 1))),
                 "n_radial": 4,
                 "E_shell": self.E_shell,
             }

@@ -58,7 +58,11 @@ def main(argv=None):
     rings = load_rings(args.rings, args.radius, args.n_sectors, args.inner_ratio,
                        args.enable_middle_layer, args.middle_layer_ratio)
 
-    shell_fig_dir = Path(args.save_figs) / "shell_displacement_iter" if args.save_figs else None
+    if args.save_shell_iter:
+        base_dir = Path(args.save_figs) if args.save_figs else Path('results')
+        shell_fig_dir = base_dir / "shell_displacement_iter"
+    else:
+        shell_fig_dir = None
 
     opt = SequentialConvexTrussOptimizer(
         radius=args.radius,
@@ -171,7 +175,7 @@ def main(argv=None):
                 print(f"Warning: failed saving figures for single subproblem: {e}")
         return 0
     
-    if args.save_figs:
+    if args.save_figs or args.save_shell_iter:
         shell_iter_dir = shell_fig_dir
         if shell_iter_dir is not None and args.save_shell_iter:
             try:

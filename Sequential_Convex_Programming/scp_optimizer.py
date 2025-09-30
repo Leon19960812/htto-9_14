@@ -77,8 +77,17 @@ class SequentialConvexTrussOptimizer:
         self.__dict__.update(self.initializer.__dict__)
         self._save_shell_iter = bool(save_shell_iter)
         self._shell_fig_dir: Optional[Path] = shell_fig_dir if self._save_shell_iter else None
+        self._shell_snapshot_count: int = 0
         if getattr(self, 'load_calc', None) is not None:
-            if hasattr(self.load_calc, 'figure_output_dir'):
+            if self._save_shell_iter:
+                if self._shell_fig_dir is not None:
+                    try:
+                        Path(self._shell_fig_dir).mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+                if hasattr(self.load_calc, 'figure_output_dir'):
+                    self.load_calc.figure_output_dir = None
+            elif hasattr(self.load_calc, 'figure_output_dir'):
                 self.load_calc.figure_output_dir = self._shell_fig_dir
             if hasattr(self.load_calc, 'current_iteration'):
                 self.load_calc.current_iteration = None
@@ -824,6 +833,7 @@ class SequentialConvexTrussOptimizer:
         self._record_iteration_state(0, theta_k, A_k)
         # 初始化接受历史（第0次）
         self.compliance_history = [self.current_compliance]
+        self._accepted_improvements = []
         
         print(f"Initial settings:")
         print(f"  Nodes: {len(theta_k)}")
@@ -1071,7 +1081,7 @@ class SequentialConvexTrussOptimizer:
                     except Exception:
                         pass
 
-                    improvement = (old_compliance - self.current_compliance) / old_compliance * 100
+                    improvement = (old_compliance - self.current_compliance) / max(abs(old_compliance), 1.0) * 100
                     success_count += 1
 
                     print(f"   Accepted step (success #{success_count})")
@@ -1116,10 +1126,20 @@ class SequentialConvexTrussOptimizer:
                     self._record_iteration_state(self.iteration_count + 1, theta_k, A_k)
                     # 记录接受后的柔度
                     self.compliance_history.append(self.current_compliance)
+                    self._accepted_improvements.append(improvement)
+                    self._save_shell_displacement()
                     # 回写接受标记到最后一个 step_detail
                     if hasattr(self, 'step_details') and self.step_details:
                         self.step_details[-1]['accepted'] = True
                         self.step_details[-1]['accepted_compliance'] = self.current_compliance
+
+                    # 额外收敛判据：连续三次接受步的改进幅度均小于0.1%
+                    if len(self._accepted_improvements) >= 3:
+                        recent_impr = [abs(v) for v in self._accepted_improvements[-3:]]
+                        if all(val < 0.1 for val in recent_impr):
+                            print("\n🎉 Algorithm converged (compliance change < 0.1% over last 3 accepted steps)")
+                            self._converged_reason = 'compliance_stall'
+                            break
 
                     # —— 阶段切换 ——
                     if len(self._accepted_window) >= 5:
@@ -1504,7 +1524,7 @@ class SequentialConvexTrussOptimizer:
             self.geometry, A, element_lengths, element_directions
         )
     
-    def _compute_load_vector(self, node_coords: np.ndarray) -> np.ndarray:
+    def _compute_load_vector(self, node_coords: np.ndarray, return_jacobian: bool = False) -> np.ndarray:
         """计算载荷向量 - 使用壳体FEA动态计算"""
         # 统一通过 load_calc 接口调用，避免重复计算
         if hasattr(self.load_calc, 'current_iteration'):
@@ -1517,7 +1537,12 @@ class SequentialConvexTrussOptimizer:
                 self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
             except Exception:
                 pass
-        load_vec = self.load_calc.compute_load_vector(node_coords, self.geometry.load_nodes, self.depth)
+        load_vec = self.load_calc.compute_load_vector(
+            node_coords,
+            self.geometry.load_nodes,
+            self.depth,
+            return_jacobian=return_jacobian,
+        )
         return load_vec
     
     def _clear_linearization_cache(self):
@@ -1559,7 +1584,10 @@ class SequentialConvexTrussOptimizer:
             )
             self.shell_params = shell_params
             if hasattr(self.load_calc, 'figure_output_dir'):
-                self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
+                if self._save_shell_iter:
+                    self.load_calc.figure_output_dir = None
+                else:
+                    self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
             if hasattr(self.load_calc, 'current_iteration'):
                 self.load_calc.current_iteration = self.iteration_count
             if hasattr(self.load_calc, 'configure_filter'):
@@ -1634,18 +1662,21 @@ class SequentialConvexTrussOptimizer:
                 self.area_history_records.append((int(iteration), int(eid), float(val)))
 
     def _save_shell_displacement(self) -> None:
-        shell_dir = getattr(self, '_shell_fig_dir', None)
-        if not shell_dir:
+        if not getattr(self, '_save_shell_iter', False):
             return
+        shell_dir = getattr(self, '_shell_fig_dir', None)
         shell = getattr(getattr(self, 'load_calc', None), 'shell_fea', None)
-        if shell is None or not hasattr(shell, 'visualize_last_solution'):
+        if shell_dir is None or shell is None or not hasattr(shell, 'visualize_last_solution'):
+            return
+        if getattr(shell, '_last_displacement', None) is None:
             return
         try:
             path = Path(shell_dir)
             path.mkdir(parents=True, exist_ok=True)
-            iter_idx = max(0, int(getattr(self, 'iteration_count', 0)))
-            fname = path / f"shell_disp_iter_{iter_idx:03d}.png"
+            idx = max(0, int(getattr(self, '_shell_snapshot_count', 0)))
+            fname = path / f"shell_disp_iter_{idx:03d}.png"
             shell.visualize_last_solution(scale=None, save_path=str(fname))
+            self._shell_snapshot_count = idx + 1
         except Exception as exc:
             print(f"Warning: failed to save shell displacement figure: {exc}")
 

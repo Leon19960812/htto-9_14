@@ -431,19 +431,53 @@ class GradientCalculator:
         index_map: Dict[int, int],
         use_shell_fd: bool,
     ) -> np.ndarray:
+        load_calc = getattr(self.opt, "load_calc", None)
+        geometry = getattr(self.opt, "geometry", None)
+        load_nodes = list(getattr(geometry, "load_nodes", []) or [])
+
+        # simple hydrostatic模式仍使用解析公式
+        if bool(getattr(load_calc, "simple_mode", False)):
+            return self._load_theta_derivative_simple(node_id, coords)
+
+        shell_mode = bool(getattr(load_calc, "enable_shell", False)) and not bool(getattr(load_calc, "simple_mode", False))
+
+        if shell_mode and load_calc is not None:
+            jac = load_calc.get_last_shell_load_jacobian()
+            if jac is None:
+                # 尝试强制刷新一次 Jacobian
+                self.opt._compute_load_vector(coords, return_jacobian=True)
+                jac = load_calc.get_last_shell_load_jacobian()
+
+            if jac is not None:
+                load_map = {int(nid): idx for idx, nid in enumerate(load_nodes)}
+                if node_id not in load_map:
+                    return np.zeros_like(base_load)
+
+                idx = load_map[node_id]
+                col_x = 2 * idx
+                col_y = col_x + 1
+                if col_y >= jac.shape[1]:
+                    return np.zeros_like(base_load)
+
+                x = float(coords[node_id, 0])
+                y = float(coords[node_id, 1])
+                df_dx = jac[:, col_x]
+                df_dy = jac[:, col_y]
+                df = (-y) * df_dx + (x) * df_dy
+                return np.asarray(df, dtype=float)
+
         if not use_shell_fd:
-            if bool(getattr(self.opt.load_calc, "simple_mode", False)):
-                return self._load_theta_derivative_simple(node_id, coords)
             return np.zeros_like(base_load)
 
         # Fallback: forward finite difference using shell FEA loads
-        if node_id not in getattr(self.opt.geometry, "load_nodes", []):
+        if node_id not in load_nodes:
             return np.zeros_like(base_load)
 
-        theta_fd = np.asarray(theta_vec, dtype=float)
         idx = index_map.get(node_id)
         if idx is None:
             return np.zeros_like(base_load)
+
+        theta_fd = np.asarray(theta_vec, dtype=float)
         theta_fd[idx] += float(self.fd_step)
 
         coords_fd = self.opt._update_node_coordinates(theta_fd)
@@ -883,7 +917,11 @@ class SubproblemSolver:
             pass
 
         # f at theta_k on free DOFs
-        f_full_k = self.opt._compute_load_vector(coords_k)
+        need_shell_jac = bool(
+            getattr(self.opt.load_calc, "enable_shell", False)
+            and not bool(getattr(self.opt.load_calc, "simple_mode", False))
+        )
+        f_full_k = self.opt._compute_load_vector(coords_k, return_jacobian=need_shell_jac)
         fff_k = f_full_k[free] * f_scale
 
         Ktheta_ff, ftheta_ff = self.gradient_calc.compute_theta_sensitivities(

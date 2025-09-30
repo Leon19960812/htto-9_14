@@ -12,7 +12,7 @@ from Sequential_Convex_Programming.cli import main
 if __name__ == '__main__':
     sys.exit(main())
 # sdp固定几何
-# python run_scp.py --radius 5.0 --n-sectors 12 --inner-ratio 0.6 --enable-middle-layer --middle-layer-ratio 0.8 --volume-fraction 0.2 --single-subproblem --sdp-fixed-geometry --simple-loads --save-figs results_fixed_simple   
+# python run_scp.py --radius 5.0 --n-sectors 18 --inner-ratio 0.6 --enable-middle-layer --middle-layer-ratio 0.8 --volume-fraction 0.2 --single-subproblem --sdp-fixed-geometry --save-figs results_fixed_simple   
 # sdp子问题
 # python run_scp.py --radius 5.0 --n-sectors 16 --inner-ratio 0.5 --enable-middle-layer --middle-layer-ratio 0.7 --volume-fraction 0.3 --single-subproblem --simple-loads --save-figs results_step_simple
 # scp
@@ -22,5 +22,5 @@ if __name__ == '__main__':
 # python -u run_scp.py --radius 5.0 --n-sectors 10 --inner-ratio 0.6 --enable-middle-layer --middle-layer-ratio 0.8 --volume-fraction 0.3 --max-iterations 30 --simple-loads --save-figs results_scp_simple 2>&1 | tee log_scp.txt
 # 启用shell_fea
 # python -u run_scp.py --radius 5.0 --n-sectors 12 --inner-ratio 0.6 --enable-middle-layer --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 50 --simple-loads --enforce-symmetry --save-figs results_scp_shell 2>&1 | tee log_scp_shell.txt
-# python -u run_scp.py --radius 5.0 --n-sectors 10 --inner-ratio 0.6 --enable-middle-layer --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 10 --enforce-symmetry --save-figs results_scp_shell  --shell-debug-log debug_shell_support.log 2>&1 | tee log_scp_shell.txt
+# python -u run_scp.py --radius 5.0 --n-sectors 10 --inner-ratio 0.6 --enable-middle-layer --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 80 --enforce-symmetry --save-shell-iter --save-figs results_scp_shell  --shell-debug-log debug_shell_support.log 2>&1 | tee log_scp_shell.txt
 # --save-shell-iter

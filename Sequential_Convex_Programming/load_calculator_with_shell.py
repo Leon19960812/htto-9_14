@@ -44,6 +44,9 @@ class LoadCalculatorWithShell:
         self.fir_window: int = 1
         self.fir_min_history: int = 1
         self._fir_base_weights: Optional[np.ndarray] = None
+        # 在解析灵敏度开发阶段默认关闭 FIR 滤波，避免对载荷历史的依赖
+        self._force_disable_filter: bool = True
+        self._last_shell_load_jacobian: Optional[np.ndarray] = None
 
         if enable_shell and shell_params and not self.simple_mode:
             self._initialize_shell_fea(shell_params)
@@ -51,6 +54,10 @@ class LoadCalculatorWithShell:
         # 载荷滤波配置：优先使用 shell_params['load_filter']，可被显式参数覆盖
         filter_cfg: Optional[Dict[str, Any]] = None
         if isinstance(shell_params, dict):
+            # 允许外部显式重新启用 FIR；默认保持关闭
+            disable_flag = shell_params.get('disable_fir_filter')
+            if disable_flag is not None:
+                self._force_disable_filter = bool(disable_flag)
             filter_cfg = shell_params.get('load_filter') or shell_params.get('fir_filter')
         if filter_params:
             merged = dict(filter_cfg or {})
@@ -102,7 +109,22 @@ class LoadCalculatorWithShell:
 
     def _init_filter(self, config: Optional[Dict[str, Any]]) -> None:
         """Initialize or reset FIR smoothing configuration."""
+        # 解析梯度阶段强制关闭 FIR，除非调用方明确要求开启
+        if self._force_disable_filter and config and 'disable_fir_filter' in config:
+            self._force_disable_filter = bool(config.get('disable_fir_filter'))
+
+        if self._force_disable_filter:
+            self.load_filter_config = {}
+            self._load_history = []
+            self._last_raw_load_vector = None
+            self.enable_fir_filter = False
+            self.fir_window = 1
+            self.fir_min_history = 1
+            self._fir_base_weights = None
+            return
+
         self.load_filter_config = dict(config or {})
+        self.load_filter_config.pop('disable_fir_filter', None)
         self._load_history = []
         self._last_raw_load_vector = None
         # 只有同时启用壳体、非 simple_mode 且配置标记为 enabled 时才激活滤波
@@ -289,7 +311,7 @@ class LoadCalculatorWithShell:
             depth=depth
         )
     
-    def compute_load_vector(self, node_coords, outer_nodes, depth):
+    def compute_load_vector(self, node_coords, outer_nodes, depth, return_jacobian: bool = False):
         """
         重新计算载荷向量（当几何改变时）
         
@@ -299,9 +321,9 @@ class LoadCalculatorWithShell:
             return self._compute_simple_load_vector(node_coords, outer_nodes, depth)
         if not self.enable_shell or self.shell_fea is None:
             raise RuntimeError("Shell FEA is required but not initialized")
-        return self._compute_shell_load_vector(node_coords, outer_nodes, depth)
-    
-    def _compute_shell_load_vector(self, node_coords, outer_nodes, depth):
+        return self._compute_shell_load_vector(node_coords, outer_nodes, depth, return_jacobian=return_jacobian)
+
+    def _compute_shell_load_vector(self, node_coords, outer_nodes, depth, return_jacobian: bool = False):
         """基于壳体的载荷向量计算"""
         coords = np.array(node_coords)
         
@@ -343,11 +365,58 @@ class LoadCalculatorWithShell:
                 raw_load_vector=raw_vector,
             )
 
+            if return_jacobian:
+                self._compute_shell_load_jacobian(coords, outer_nodes)
+            else:
+                self._last_shell_load_jacobian = None
+
             return filtered_vector
             
         except Exception as e:
             print(f"Shell load calculation failed: {e}")
             raise RuntimeError(f"Shell load calculation failed: {e}")
+
+    def _compute_shell_load_jacobian(self, coords: np.ndarray, outer_nodes: List[int]) -> Optional[np.ndarray]:
+        """Assemble ∂f/∂p where p 为支撑位置坐标 (x_i, y_i)。"""
+
+        shell_state = self.shell_fea.get_last_solution() if self.shell_fea else None
+        if not shell_state or shell_state.get("lambda") is None:
+            self._last_shell_load_jacobian = None
+            return None
+
+        lambda_vec = np.asarray(shell_state["lambda"], dtype=float)
+        u_vec = np.asarray(shell_state["u"], dtype=float)
+        C = np.asarray(shell_state["C"], dtype=float)
+
+        n_supports = len(outer_nodes)
+        n_dof_truss = coords.shape[0] * 2
+        shell_dof = u_vec.size
+
+        if C.shape[0] != 2 * n_supports:
+            raise RuntimeError("Mismatch between load nodes and shell constraint count.")
+
+        jac = np.zeros((n_dof_truss, 2 * n_supports), dtype=float)
+
+        for i in range(n_supports):
+            for axis_idx, axis in enumerate(("x", "y")):
+                dC = self.shell_fea.build_support_constraint_derivative(i, axis)
+                rhs_top = -(dC.T @ lambda_vec)
+                rhs_bottom = -(dC @ u_vec)
+                rhs = np.concatenate([rhs_top, rhs_bottom])
+                solution = self.shell_fea.solve_augmented_system(rhs)
+                lambda_dot = solution[shell_dof:].reshape(n_supports, 2)
+                col = 2 * i + axis_idx
+                for j, node_idx in enumerate(outer_nodes):
+                    jac[2 * node_idx, col] = lambda_dot[j, 0]
+                    jac[2 * node_idx + 1, col] = lambda_dot[j, 1]
+
+        self._last_shell_load_jacobian = jac
+        return jac
+
+    def get_last_shell_load_jacobian(self) -> Optional[np.ndarray]:
+        """返回最近一次壳体载荷计算得到的 ∂f/∂p。"""
+
+        return None if self._last_shell_load_jacobian is None else self._last_shell_load_jacobian.copy()
 
     # ---------------------------
     # Simple hydrostatic loads
@@ -564,7 +633,7 @@ def integrate_shell_into_existing_system():
     shell_params = {
         'outer_radius': initializer.radius,
         'depth': initializer.depth,
-        'thickness': 0.1,  # 1cm厚度
+        'thickness': 0.1,  # 10cm厚度
         'n_circumferential': len(getattr(initializer, 'load_nodes', initializer.outer_nodes)),  # 与桁架节点对应
         'n_radial': 2,  # 薄壳，只要2层
         'E_shell': 210e9  # 210 GPa，比桁架刚度大
