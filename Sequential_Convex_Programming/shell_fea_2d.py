@@ -41,7 +41,7 @@ class Shell2DFEA:
                  n_circumferential: int = 100, n_radial: int = 5,
                  material_data: Optional[ShellMaterialData] = None,
                  k_neighbors: int = 5,
-                 sigma_factor: float = 1.5,
+                 sigma_factor: float = 4,
                  adaptive_sigma: bool = False,
                  epsilon_weight: float = 0.05):
         """

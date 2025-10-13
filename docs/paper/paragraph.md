@@ -1,0 +1,5 @@
+\section{Numerical Results}
+
+The Sequential Convex Programming framework has been implemented in Python(3.12.7). The semidefinite programming subproblems within each SCP iteration are formulated using the CVXPY optimization modeling language and solved by MOSEK. All numerical experiments have been performed on a laptop equipped with an Intel(R) Core(TM) i7-9750H CPU running at 2.60 GHz with 32 GB RAM.
+
+The truss material uses steel parameters with Young's modulus $E_{\text{truss}} = 2.10\times10^{8}\,\mathrm{Pa}$ and density $\rho_{\text{steel}} = 7850\,\mathrm{kg/m^3}$. The auxiliary shell model used to transfer hydrostatic loads is set with $E_{\text{shell}} = 2.10\times10^{11}\,\mathrm{Pa}$ and Poisson ratio $\nu = 0.3$ (thickness specified per case). For hydrostatic loading, we adopt seawater density $\rho_w = 1025\,\mathrm{kg/m^3}$ and gravitational acceleration $g = 9.81\,\mathrm{m/s^2}$. The reference base pressure at depth $H$ is $p_0 = \rho_w g H$, and the nodal loads applied to the truss are obtained from the coupled shell FEA by mapping support reactions to the truss load nodes. The structural depth $H$ is specified for each example case.

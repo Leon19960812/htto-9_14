@@ -218,6 +218,8 @@ class SequentialConvexTrussOptimizer:
         self.current_compliance = None
         self.trust_radius = self.trust_region_params.initial_radius
         self.iteration_count = 0
+        # 连续拒绝计数器（用于最小信赖域处的驻点判停）
+        self._consecutive_rejects = 0
         # 映射：优化变量 θ 的索引 -> node_id（初始化为 load_nodes 全量，后续按 θ 长度截取）
         try:
             self.theta_node_ids = list(getattr(self.geometry, 'load_nodes', []))
@@ -1039,6 +1041,11 @@ class SequentialConvexTrussOptimizer:
                 
                 # 接受或拒绝步长
                 if accept_step:
+                    # 接受步则清零连续拒绝计数
+                    try:
+                        self._consecutive_rejects = 0
+                    except Exception:
+                        pass
                     # 先检查收敛（用更新前的值）
                     if self.convergence_checker.check_convergence(theta_k, theta_new, A_k, A_new):
                         if getattr(self, 'enable_aasi', False):
@@ -1134,10 +1141,10 @@ class SequentialConvexTrussOptimizer:
                         self.step_details[-1]['accepted_compliance'] = self.current_compliance
 
                     # 额外收敛判据：连续三次接受步的改进幅度均小于0.1%
-                    if len(self._accepted_improvements) >= 3:
+                    if len(self._accepted_improvements) >= 1:
                         recent_impr = [abs(v) for v in self._accepted_improvements[-3:]]
-                        if all(val < 0.1 for val in recent_impr):
-                            print("\n🎉 Algorithm converged (compliance change < 0.1% over last 3 accepted steps)")
+                        if all(val < 0.01 for val in recent_impr):
+                            print("\n🎉 Algorithm converged (compliance change < 0.01% over last 3 accepted steps)")
                             self._converged_reason = 'compliance_stall'
                             break
 
@@ -1285,6 +1292,26 @@ class SequentialConvexTrussOptimizer:
                         self._pending_quality = None
                     except Exception:
                         pass
+                    # 在最小信赖域附近累计拒绝步并判停
+                    try:
+                        self._consecutive_rejects = int(getattr(self, '_consecutive_rejects', 0)) + 1
+                    except Exception:
+                        self._consecutive_rejects = 1
+                    # 判定是否处于最小信赖域（留出5%松弛，避免浮点误差）
+                    try:
+                        min_tr = float(self.trust_region_params.min_radius)
+                        at_min_tr = bool(self.trust_radius <= 1.05 * min_tr)
+                    except Exception:
+                        at_min_tr = False
+                    # 连续K次拒绝则认为到达局部驻点，终止优化
+                    K_reject = 3
+                    if at_min_tr and self._consecutive_rejects >= K_reject:
+                        print("\n🎉 Algorithm converged (no descent step within minimum trust region; consecutive rejects)")
+                        try:
+                            self._converged_reason = 'no_descent_min_trust_region'
+                        except Exception:
+                            pass
+                        break
                     # 回写拒绝标记到最后一个 step_detail
                     if hasattr(self, 'step_details') and self.step_details:
                         self.step_details[-1]['accepted'] = False

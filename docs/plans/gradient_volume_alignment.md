@@ -42,3 +42,56 @@ Addressing these two items will bring the implementation back in line with the p
      从 λ̇ 中直接读取 `∂f/∂θ_j`。
   3. 在 `GradientCalculator` 中接入该流程：当启用壳体载荷时自动返回解析灵敏度，而不是落回有限差分。
 - 该部分工作量较大，留待下一轮完善。
+
+## 2025-09-18 Review
+
+- **结论**：对壳体载荷使用鞍式系统线性化（[K C^T; C 0]）求解 \(u, \lambda\) 并通过扰动方程获得 \(\dot{\lambda}\) 的思路在理论上可行，因为壳体刚度矩阵 K 与支撑位置无关，支撑约束矩阵 C 的变化即可驱动反力灵敏度。
+- **主要风险**：
+  - `_compute_support_weights` 先用 `argsort` 选取最近 k 个边界节点，再做高斯权重并夹紧角度、方差；这些离散选择与 `min/max` 裁剪在支撑位置穿越节点时不可导，解析梯度会出现跳变。
+  - 壳体反力转成桁架载荷时还要乘上节点径向单位向量 `(-x/r, -y/r)`，该映射的导数（含半径归一化）必须显式写出，否则梯度缺项。
+  - 当前载荷向量默认通过 FIR 滤波缓冲，滤波历史依赖迭代轨迹；若不重新定义滤波在灵敏度中的角色，解析导数与实际载荷不一致。
+  - 每个 \(	heta_j\) 需要解一次增量方程；若不重用原始鞍式系统的分解，计算成本很高。
+- **改进建议**：
+  1. 用全边界节点的 softmax 权重或预先固定的分片基函数替换 "k 最近邻" 裁剪，确保 `C(θ)` 对支撑位置是光滑函数；必要时对角度夹紧使用平滑近似（SoftClip）。
+  2. 在 `Shell2DFEA` 中显式给出 `∂C/∂p_i`，并封装一个求解接口：返回支撑反力、用于 reuse 的 `A` 分解，以及给定 `∂C` 时的 `∂λ`。这样 `GradientCalculator` 就能一次因式分解、对多个方向复用。
+  3. 在 `LoadCalculatorWithShell` 中补充解析公式，把 `λ` 到 `f` 的转换对节点坐标求导（含 `r = √(x²+y²)` 与单位向量），并与桁架节点坐标对设计变量的导数做链式相乘。
+  4. 明确载荷滤波的策略：要么在灵敏度计算时旁路滤波（直接用原始载荷），要么给出滤波权重对输入的线性导数并同步维护历史缓冲。
+  5. 为壳体灵敏度实现提供测试脚本：固定几何与支撑点，对比解析导数与有限差分结果，验证在 softmax/滤波配置下的一致性。
+
+
+### Implementation Plan (pending)
+
+1. **禁用 FIR 滤波**：
+   - 将 shell 模式的默认配置中 `load_filter.enabled` 置为 `False` 或直接移除相关配置。
+   - 梳理 `LoadCalculatorWithShell` 的调用路径，确保灵敏度计算时不再维护历史缓冲。
+
+2. **重构支撑权重为 softmax**：
+   - 在 `Shell2DFEA._compute_support_weights` 中，改为对所有边界节点计算角度差并通过 `softmax(-Δθ^2 / τ)` 得到权重，τ 为可调温度。
+   - 提供可选的局部掩码/阈值以控制性能，但保持导数连续。
+   - 输出同时返回 `∂w/∂θ` 所需的中间量，为后续解析梯度调用做准备。
+
+3. **链式求导接口准备**：
+   - 在 `Shell2DFEA` 内部封装求解器接口：返回支撑反力、系统分解（以便重用）以及软权重相关的缓存。
+   - 在 `LoadCalculatorWithShell` 中接入新的权重结构，验证与旧逻辑一致。
+
+4. **验证与回归**：
+   - 构造简单壳体载荷场景（固定几何/支撑），对比 softmax 与原高斯核输出的差异。
+   - 暂时保持有限差分兜底，后续在解析导数实现后用它来做精度验证。
+
+## 2025-09-18 Implementation Notes
+
+- 额外增加柔度停滞判据：若连续三次接受步的柔度改善幅度均小于 0.1% (1e-3)，则提前收敛，避免尾段信赖域反复拒绝但变量/目标已稳定。
+- 已默认关闭 shell 模式下的 FIR 滤波，并提供 `disable_fir_filter=False` 选项以显式重启。载荷历史缓存在解析梯度流程中不再参与。
+- `Shell2DFEA._compute_support_weights` 改用 softmax(-Δθ²/τ) 输出连续可导的权重，同时缓存 `dw/dx, dw/dy`、角度导数以及增广系统矩阵 `A`、约束矩阵 `C`。
+- 新增 `Shell2DFEA.build_support_constraint_derivative`、`solve_augmented_system` 等接口，支持构造 ∂C/∂p 并复用增广系统求解。
+- `LoadCalculatorWithShell` 可以在求载荷时请求 `return_jacobian=True`，内部会调用壳体接口构建 ∂f/∂p（支撑坐标），并通过 `get_last_shell_load_jacobian()` 暴露。
+- `GradientCalculator._load_theta_derivative` 现已在壳体模式下直接读取 Jacobian，与节点坐标对角度的导数做链式求导（dx/dθ = -y, dy/dθ = x），默认停止使用有限差分。
+- 后续需关注数值稳定性：加载 Jacobian 规模大时的条件数，以及解析梯度与有限差分的残差比较（可选验证脚本）。
+
+## 2025-09-18 Milestone Summary
+
+- 壳体载荷解析梯度已完整融入：`LoadCalculatorWithShell` 提供 `∂f/∂p`，`GradientCalculator` 对 `θ` 做链式传导，避免再落回壳体有限差分。
+- 信赖域尾段拒绝问题解决：新增“最近三次接受步改进 < 0.1%”收敛判据，遇到柔度停滞时自动退出。
+- 比对实验：固定几何单次 SDP (`--single-subproblem --sdp-fixed-geometry`) 在简化载荷下柔度 `C_new≈1.30×10^2`，完整 SCP（壳体载荷、解析梯度）降至 `≈1.24×10^2`，相较基线 (`C_baseline≈3.63×10^2`) 提升显著。
+- 快照输出完善：`--save-shell-iter` 现默认写入 `results/shell_displacement_iter/`，每个接受步保存最新壳体位移图，不会被覆盖。
+- 相关日志、脚本（`log_scp_shell.txt`, `debug_shell_support.log`, `results_scp_shell/*`）已验证流程稳定，可据此撰写实验段落与图表。

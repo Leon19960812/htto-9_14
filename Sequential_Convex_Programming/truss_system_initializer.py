@@ -270,8 +270,8 @@ class TrussSystemInitializer:
                 "outer_radius": self.radius,
                 "depth": self.depth,
                 "thickness": 0.15,
-                "n_circumferential": int(math.ceil(2 * (self.n_sectors + 1))),
-                "n_radial": 4,
+                "n_circumferential": int(math.ceil(3 * (self.n_sectors + 1))),
+                "n_radial": 3,
                 "E_shell": self.E_shell,
             }
             shell_cfg = dict(self.shell_params)
