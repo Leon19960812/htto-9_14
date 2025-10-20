@@ -76,6 +76,7 @@ class LoadCalculatorWithShell:
         """初始化壳体FEA模块"""
         try:
             # 提取参数
+            thickness = shell_params.get('thickness', 0.1)
             outer_radius = shell_params.get('outer_radius', 5.0)
             depth = shell_params.get('depth', 50.0)
             thickness = shell_params.get('thickness', 0.1)
@@ -92,8 +93,9 @@ class LoadCalculatorWithShell:
             )
             
             # 创建壳体FEA模块
+            # Ensure that shell inner wall coincides with truss radius when possible
             self.shell_fea = Shell2DFEA(
-                outer_radius=outer_radius,
+                outer_radius=float(outer_radius),
                 depth=depth,
                 n_circumferential=n_circumferential,
                 n_radial=n_radial,
@@ -244,6 +246,21 @@ class LoadCalculatorWithShell:
         
         # 获取外层节点当前坐标
         outer_node_coords = np.array([node_coords[i] for i in geometry.load_nodes])
+        # Project support positions to shell inner wall (attach to inner boundary)
+        try:
+            inner_radius = float(self.shell_fea.outer_radius - self.shell_fea.material.thickness)
+            if inner_radius > 0 and outer_node_coords.size:
+                pos_inner = []
+                for (px, py) in outer_node_coords:
+                    r = float(np.hypot(px, py))
+                    if r > 1e-12:
+                        s = inner_radius / r
+                        pos_inner.append([px * s, py * s])
+                    else:
+                        pos_inner.append([0.0, 0.0])
+                outer_node_coords = np.asarray(pos_inner, dtype=float)
+        except Exception:
+            pass
         
         # 移除support position信息以节省空间
         # print(f"  Support positions: {len(outer_node_coords)} nodes")

@@ -236,6 +236,7 @@ class TrussSystemInitializer:
     def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2,
                  E_steel=210e9, E_shell=210e9,
                  enable_middle_layer=False, middle_layer_ratio=0.85,
+                 k_theta_steps: int = 2,
                  use_polar: bool = True, polar_config: dict = None, simple_loads: bool = False):
         # Store basic parameters
         self.radius = float(radius)
@@ -245,6 +246,7 @@ class TrussSystemInitializer:
         self.volume_fraction = float(volume_fraction)
         self.enable_middle_layer = bool(enable_middle_layer)
         self.middle_layer_ratio = float(middle_layer_ratio)
+        self.k_theta_steps = int(k_theta_steps)
 
         # Material
         self.material_data = MaterialData(
@@ -266,11 +268,14 @@ class TrussSystemInitializer:
         try:
             from .load_calculator_with_shell import LoadCalculatorWithShell
             self.use_simple_loads = bool(simple_loads)
+            thickness = 0.15
             self.shell_params = {
-                "outer_radius": self.radius,
+                # Set shell outer radius so that inner wall (outer_radius - thickness) matches truss outer ring radius
+                "outer_radius": float(self.radius + thickness),
                 "depth": self.depth,
-                "thickness": 0.15,
-                "n_circumferential": int(math.ceil(3 * (self.n_sectors + 1))),
+                "thickness": thickness,
+                # "n_circumferential": int(math.ceil(3 * (self.n_sectors + 1))),
+                "n_circumferential": 150,
                 "n_radial": 3,
                 "E_shell": self.E_shell,
             }
@@ -296,7 +301,7 @@ class TrussSystemInitializer:
             {"radius": self.radius, "n_nodes": self.n_sectors + 1, "type": "outer"},
             {"radius": self.radius * self.inner_ratio, "n_nodes": self.n_sectors + 1, "type": "inner"},
         ]
-        pg = _PolarGeometry(_PolarConfig(rings=rings))
+        pg = _PolarGeometry(_PolarConfig(rings=rings, k_theta_steps=self.k_theta_steps))
         # Expose PolarGeometry instance for downstream optimizer usage
         self.polar_geometry = pg
 

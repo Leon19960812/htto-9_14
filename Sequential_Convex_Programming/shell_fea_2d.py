@@ -23,8 +23,9 @@ class ShellMeshData:
     """壳体网格数据"""
     nodes: np.ndarray         # 节点坐标 [n_nodes, 2]
     elements: np.ndarray      # 单元连接 [n_elements, 3] (三角形单元)
-    boundary_nodes: List[int] # 外边界节点索引
-    boundary_edges: List[Tuple[int, int]] # 外边界边列表
+    boundary_nodes: List[int] # 外边界节点索引（外壁）
+    boundary_edges: List[Tuple[int, int]] # 外边界边列表（用于压力积分）
+    inner_boundary_nodes: List[int] # 内边界节点索引（内壁，用于支撑映射）
 
 class Shell2DFEA:
     """
@@ -41,7 +42,7 @@ class Shell2DFEA:
                  n_circumferential: int = 100, n_radial: int = 5,
                  material_data: Optional[ShellMaterialData] = None,
                  k_neighbors: int = 5,
-                 sigma_factor: float = 4,
+                 sigma_factor: float = 2,
                  adaptive_sigma: bool = False,
                  epsilon_weight: float = 0.05):
         """
@@ -139,9 +140,10 @@ class Shell2DFEA:
         
         elements = np.array(elements)
         
-        # 识别边界节点（最外层）
+        # 识别外边界节点（最外层）与内边界节点（最内层）
         boundary_nodes = list(range((self.n_radial - 1) * self.n_circumferential,
                                    self.n_radial * self.n_circumferential))
+        inner_boundary_nodes = list(range(0, self.n_circumferential))
 
         boundary_edges: List[Tuple[int, int]] = []
         if len(boundary_nodes) >= 2:
@@ -154,26 +156,26 @@ class Shell2DFEA:
             nodes=nodes,
             elements=elements, 
             boundary_nodes=boundary_nodes,
-            boundary_edges=boundary_edges
+            boundary_edges=boundary_edges,
+            inner_boundary_nodes=inner_boundary_nodes,
         )
         
         print(f"  Generated mesh: {len(nodes)} nodes, {len(elements)} elements")
 
     def _compute_boundary_angles(self):
-        """计算外边界节点的极角，用于支撑软权重分配"""
-        bnodes = self.mesh.boundary_nodes
+        """计算内外边界节点的极角：外边界用于压力积分；内边界用于支撑映射"""
         coords = self.mesh.nodes
-        thetas = []
-        for n in bnodes:
-            x, y = coords[n]
-            theta = math.atan2(y, x)
-            # 夹到 [0, pi]
-            if theta < 0:
-                theta = 0.0
-            if theta > math.pi:
-                theta = math.pi
-            thetas.append(theta)
-        self.boundary_angles = np.array(thetas)
+        def angles_for(nodes_idx: List[int]):
+            thetas = []
+            for n in nodes_idx:
+                x, y = coords[n]
+                theta = math.atan2(y, x)
+                theta = min(max(theta, 0.0), math.pi)
+                thetas.append(theta)
+            return np.array(thetas)
+
+        self.boundary_angles_outer = angles_for(self.mesh.boundary_nodes)
+        self.boundary_angles_inner = angles_for(self.mesh.inner_boundary_nodes)
     
     def _precompute_element_matrices(self):
         """预计算单元刚度矩阵"""
@@ -360,7 +362,7 @@ class Shell2DFEA:
         if not self._last_support_softmax:
             return None
 
-        boundary_nodes = np.asarray(self.mesh.boundary_nodes, dtype=int)
+        boundary_nodes = np.asarray(self.mesh.inner_boundary_nodes, dtype=int)
         gradients: List[dict] = []
         for cache in self._last_support_softmax:
             gradients.append({
@@ -440,7 +442,16 @@ class Shell2DFEA:
 
     def visualize_last_solution(self, scale: Optional[float] = None,
                                 save_path: Optional[str] = None,
-                                show_reference: bool = False) -> None:
+                                show_reference: bool = False,
+                                cbar_range: Optional[Tuple[float, float]] = None,
+                                disp_unit: str = 'm',
+                                overlay_segments: Optional[np.ndarray] = None,
+                                overlay_kwargs: Optional[dict] = None,
+                                overlay_truss_drawer: Optional[object] = None,
+                                show_title: bool = False,
+                                cbar_fraction: Optional[float] = None,
+                                cbar_shrink: Optional[float] = None,
+                                cmap: str = 'viridis_r') -> None:
         """渲染最近一次求解的位移彩色云图（类似商业软件）。
 
         Parameters
@@ -459,6 +470,11 @@ class Shell2DFEA:
         try:
             import matplotlib.pyplot as plt
             from matplotlib.collections import PolyCollection, LineCollection
+            from matplotlib import colors as mcolors
+            try:
+                from mpl_toolkits.axes_grid1 import make_axes_locatable
+            except Exception:
+                make_axes_locatable = None
         except ImportError:
             print("Matplotlib not available for visualization")
             return
@@ -478,14 +494,47 @@ class Shell2DFEA:
 
         elements = self.mesh.elements
         polys = displaced[elements]
-        disp_mag = np.linalg.norm(disp, axis=1)
-        cell_values = np.mean(disp_mag[elements], axis=1)
+        disp_mag_m = np.linalg.norm(disp, axis=1)
+        # Unit conversion for color values
+        unit = (disp_unit or 'm').lower()
+        if unit == 'mm':
+            disp_mag_plot = disp_mag_m * 1e3
+            cbar_label = '|u| (mm)'
+            # If user provides cbar_range in mm, use directly; otherwise None
+            norm = None
+            if cbar_range is not None and len(cbar_range) == 2:
+                vmin, vmax = float(cbar_range[0]), float(cbar_range[1])
+                if vmax <= vmin:
+                    vmax = vmin + 1e-12
+                norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+        else:
+            disp_mag_plot = disp_mag_m
+            cbar_label = '|u| (m)'
+            norm = None
+            if cbar_range is not None and len(cbar_range) == 2:
+                vmin, vmax = float(cbar_range[0]), float(cbar_range[1])
+                if vmax <= vmin:
+                    vmax = vmin + 1e-12
+                norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+
+        cell_values = np.mean(disp_mag_plot[elements], axis=1)
 
         fig, ax = plt.subplots(figsize=(8, 6))
-        poly = PolyCollection(polys, array=cell_values, cmap='viridis', edgecolors='none')
+        poly = PolyCollection(polys, array=cell_values, cmap=cmap, edgecolors='none', norm=norm)
         ax.add_collection(poly)
-        cbar = fig.colorbar(poly, ax=ax, pad=0.02)
-        cbar.set_label('|u| (m)')
+        # Place a colorbar that strictly matches the main axes height
+        if make_axes_locatable is not None:
+            divider = make_axes_locatable(ax)
+            size_pct = f"{int((cbar_fraction if cbar_fraction is not None else 0.04)*100)}%"
+            pad_frac = 0.02
+            cax = divider.append_axes("right", size=size_pct, pad=pad_frac)
+            cbar = fig.colorbar(poly, cax=cax)
+        else:
+            # Fallback to standard colorbar
+            frac = 0.035 if cbar_fraction is None else float(cbar_fraction)
+            shr = 0.75 if cbar_shrink is None else float(cbar_shrink)
+            cbar = fig.colorbar(poly, ax=ax, pad=0.02, fraction=frac, shrink=shr)
+        cbar.set_label(cbar_label)
 
         if show_reference:
             seg_ref = []
@@ -503,9 +552,31 @@ class Shell2DFEA:
         ax.set_aspect('equal')
         ax.grid(True, alpha=0.3)
         title_scale = f"auto({scale_use:.2e})" if scale is None else f"{scale_use:.2f}"
-        ax.set_title(f'Shell displacement (scale={title_scale})', fontweight='bold')
+        if show_title:
+            ax.set_title(f'Shell displacement (scale={title_scale})', fontweight='bold')
         ax.set_xlim(np.min(displaced[:, 0]) - 0.2, np.max(displaced[:, 0]) + 0.2)
         ax.set_ylim(np.min(displaced[:, 1]) - 0.2, np.max(displaced[:, 1]) + 0.2)
+
+        # Optional overlay of truss structure segments
+        if overlay_segments is not None:
+            try:
+                segs = np.asarray(overlay_segments, dtype=float)
+                if segs.ndim == 3 and segs.shape[-2:] == (2, 2):
+                    okw = overlay_kwargs or {}
+                    color = okw.get('color', 'navy')
+                    linewidths = okw.get('linewidths', 1.0)
+                    alpha = okw.get('alpha', 0.9)
+                    ax.add_collection(LineCollection(segs, colors=color, linewidths=linewidths, alpha=alpha))
+            except Exception:
+                pass
+
+        # Optional callback to draw truss using project visualization util on the same axes
+        if overlay_truss_drawer is not None:
+            try:
+                # overlay_truss_drawer is a callable taking (ax)
+                overlay_truss_drawer(ax)
+            except Exception:
+                pass
 
         plt.tight_layout()
         if save_path:
@@ -569,12 +640,12 @@ class Shell2DFEA:
         返回值保持与旧接口兼容，同时缓存 softmax 中间量供灵敏度使用。
         """
         weights_all: List[List[Tuple[int, float]]] = []
-        boundary_nodes = np.asarray(self.mesh.boundary_nodes, dtype=int)
+        boundary_nodes = np.asarray(self.mesh.inner_boundary_nodes, dtype=int)
         if boundary_nodes.size == 0:
             self._last_support_softmax = []
             return weights_all
 
-        theta_b = self.boundary_angles
+        theta_b = self.boundary_angles_inner
         # 基础角度步长，用于设定 softmax 温度
         dtheta = math.pi / max(self.n_circumferential - 1, 1)
         tau_base = max(1e-8, self.softmax_tau_factor * dtheta)

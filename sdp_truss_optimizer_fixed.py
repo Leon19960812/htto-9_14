@@ -65,7 +65,8 @@ class SDPTrussOptimizer:
         # 新增：统一载荷计算器（与SCP一致）
         if shell_params is None:
             shell_params = {
-                'outer_radius': radius,
+                # Set outer radius so inner wall (outer_radius - thickness) matches truss radius
+                'outer_radius': radius + 0.01,
                 'depth': depth,
                 'thickness': 0.01,
                 'n_circumferential': n_sectors + 1,
@@ -633,13 +634,21 @@ class SDPTrussOptimizer:
             valid_areas = areas_mm2[areas_mm2 > self.removal_threshold * 1e6]
             
             if len(valid_areas) > 0:
-                ax4.hist(valid_areas, bins=min(25, len(valid_areas)), alpha=0.7, 
+                num_bins = max(1, min(25, len(valid_areas)))
+                ax4.hist(valid_areas, bins=num_bins, alpha=0.7,
                         color='skyblue', edgecolor='black')
-                ax4.axvline(x=self.removal_threshold*1e6, color='red', linestyle='--', 
-                           label=f'Removal Threshold')
-                ax4.set_xlabel('Cross-sectional Area (mm²)')
-                ax4.set_ylabel('Number of Members')
+                ax4.axvline(x=self.removal_threshold*1e6, color='red', linestyle='--',
+                           label='Removal Threshold')
+                a_max = float(getattr(self, 'A_max', 1e-2))
+                if not np.isfinite(a_max) or a_max <= 0:
+                    a_max = 1e-2
+                a_max_mm2 = max(a_max * 1e6, float(np.max(valid_areas)))
+                ax4.set_xlim(0, a_max_mm2)
+                ax4.set_xticks(np.linspace(0, a_max_mm2, 11))
+                ax4.set_xlabel('Cross-sectional Area (mm²)', fontsize=14)
+                ax4.set_ylabel('Number of Members', fontsize=14)
                 ax4.set_title('Area Distribution')
+                ax4.tick_params(axis='both', labelsize=14)
                 ax4.legend()
                 ax4.grid(True, alpha=0.3)
             else:
@@ -713,13 +722,21 @@ Verification:
                 if len(valid_areas) > 0:
                     import matplotlib.pyplot as plt
                     fig_h, ax_h = plt.subplots(figsize=(8, 6))
-                    ax_h.hist(valid_areas, bins=min(25, len(valid_areas)), alpha=0.7,
+                    num_bins = max(1, min(25, len(valid_areas)))
+                    ax_h.hist(valid_areas, bins=num_bins, alpha=0.7,
                               color='skyblue', edgecolor='black')
                     ax_h.axvline(x=self.removal_threshold*1e6, color='red', linestyle='--',
                                  label='Removal Threshold')
-                    ax_h.set_xlabel('Cross-sectional Area (mm²)',fontsize=12)
-                    ax_h.set_ylabel('Number of Members',fontsize=12)
+                    a_max = float(getattr(self, 'A_max', 1e-2))
+                    if not np.isfinite(a_max) or a_max <= 0:
+                        a_max = 1e-2
+                    a_max_mm2 = max(a_max * 1e6, float(np.max(valid_areas)))
+                    ax_h.set_xlim(0, a_max_mm2)
+                    ax_h.set_xticks(np.linspace(0, a_max_mm2, 11))
+                    ax_h.set_xlabel('Cross-sectional Area (mm²)', fontsize=14)
+                    ax_h.set_ylabel('Number of Members', fontsize=14)
                     #ax_h.set_title('')
+                    ax_h.tick_params(axis='both', labelsize=14)
                     ax_h.legend()
                     ax_h.grid(True, alpha=0.3)
                     plt.tight_layout()
@@ -727,6 +744,16 @@ Verification:
                     plt.savefig(hist_path, dpi=300, bbox_inches='tight')
                     print(f"✓ Area histogram saved to: {hist_path}")
                     plt.show()
+                try:
+                    np.savetxt(
+                        os.path.join(results_dir, "final_areas.csv"),
+                        np.asarray(self.final_areas, dtype=float),
+                        delimiter=',',
+                        header='area_m2',
+                        comments=''
+                    )
+                except Exception as exp:
+                    print(f"Failed to export SDP final areas: {exp}")
             except Exception as e:
                 print(f"Failed to save SDP area histogram: {e}")
 

@@ -316,7 +316,7 @@ Based on the step quality ratio, the trust region radius is updated according to
 \end{equation}
 When $\rho^{(k)} > \eta_2$, the linearization proves highly accurate, justifying an expanded trust region for the next iteration. Conversely, when $\rho^{(k)} < \eta_1$, the linearization quality is insufficient, necessitating both trust region reduction and step rejection. For intermediate values of $\rho^{(k)}$, the current trust region size is maintained while accepting the computed step.
 
-Trust region parameters are chosen following established guidelines in the literature. The shrinking and expanding factors ($\gamma_{\text{shrink}} = 0.5$, $\gamma_{\text{expand}} = 2.0$) align with typical values suggested in \cite{yuan2000review}, while the threshold parameters ($\eta_1 = 0.01$, $\eta_2 = 0.75$) are set within the commonly used ranges for practical engineering applications \cite{yuan2015recent}.
+Trust region parameters are chosen following established guidelines in the literature. The shrinking and expanding factors ($\gamma_{\text{shrink}} = 0.5$, $\gamma_{\text{expand}} = 1.5$) align with typical values suggested in \cite{yuan2000review}, while the threshold parameters ($\eta_1 = 0.01$, $\eta_2 = 0.75$) are set within the commonly used ranges for practical engineering applications \cite{yuan2015recent}.
 
 
 \subsection{Node Merging Strategy}
@@ -390,59 +390,18 @@ An overview of the SCP algorithm is summarized in Algorithm~1. The method integr
 
 The Sequential Convex Programming framework has been implemented in Python(3.12.7). The semidefinite programming subproblems within each SCP iteration are formulated using the CVXPY optimization modeling language and solved by MOSEK. All numerical experiments have been performed on a laptop equipped with an Intel(R) Core(TM) i7-9750H CPU running at 2.60 GHz with 32 GB RAM.
 
-The truss material uses steel parameters with Young's modulus $E_{\text{truss}} = 2.10\times10^{8}\,\mathrm{Pa}$ and density $\rho_{\text{steel}} = 7850\,\mathrm{kg/m^3}$. The auxiliary shell model used to transfer hydrostatic loads is set with $E_{\text{shell}} = 2.10\times10^{11}\,\mathrm{Pa}$ and Poisson ratio $\nu = 0.3$ (thickness specified per case). For hydrostatic loading, we adopt seawater density $\rho_w = 1025\,\mathrm{kg/m^3}$ and gravitational acceleration $g = 9.81\,\mathrm{m/s^2}$. The reference base pressure at depth $H$ is $p_0 = \rho_w g H$, and the nodal loads applied to the truss are obtained from the coupled shell FEA by mapping support reactions to the truss load nodes. The structural depth $H$ is specified for each example case.
+In all examples, the truss material uses steel parameters with Young's modulus $E_{\text{truss}} = 2.10\times10^{8}\,\mathrm{Pa}$ and density $\rho_{\text{steel}} = 7850\,\mathrm{kg/m^3}$. The auxiliary shell model used to transfer hydrostatic loads is set with $E_{\text{shell}} = 2.10\times10^{11}\,\mathrm{Pa}$ and Poisson ratio $\nu = 0.3$. For hydrostatic loading, we adopt seawater density $\rho_w = 1025\,\mathrm{kg/m^3}$ and gravitational acceleration $g = 9.81\,\mathrm{m/s^2}$. The reference base pressure at depth $H$ is $p_0 = \rho_w g H$, and the nodal loads applied to the truss are obtained from the coupled shell FEA by mapping support reactions to the truss load nodes. The structural depth $H$ is specified for each example case.
 
-Trust region and stopping parameters are as follows. The trust‑region radius is initialized at $\Delta^{(0)} = \pi/180$ and bounded within $[\pi/720,\, \mathrm{deg}(2.0)]$. Step acceptance is governed by the step‑quality ratio $\rho$: we accept when $\rho > 0.01$ and expand the radius when $\rho > 0.75$; otherwise the step is rejected and the radius shrinks. Expansion and shrink factors are $1.5$ and $0.5$, respectively. Convergence is declared when the relative changes of geometry $\boldsymbol{\theta}$ and areas $\mathbf{A}$ between accepted iterations are both below $10^{-3}$. In addition, we terminate when the compliance variation over the last three accepted iterations falls below $0.1\%$. The maximum number of iterations is set to $30$.
-
-
+The trust‑region radius is initialized at $\Delta^{(0)} = \pi/180$ and bounded within $[\pi/720,\, \pi/90]$. respectively. The shrinking and expanding factors ($\gamma_{\text{shrink}} = 0.5$, $\gamma_{\text{expand}} = 1.5$) align with typical values suggested in \cite{yuan2000review}, while the threshold parameters ($\eta_1 = 0.01$, $\eta_2 = 0.75$) are set within the commonly used ranges for practical engineering applications \cite{yuan2015recent}. Convergence is declared when the relative changes of compliance between accepted iterations is below $10^{-4}$. 
 
 
-\subsection{Fixed Geometry (SDP) vs Moving Nodes (SCP)}
-
-In this section, we present a semicircular truss structure under hydrostatic loading  case to demonstrate the advantages of geometry optimization in dealing with  design-dependent pressure conditions. This is done by comparing solutions obtained with fixed geometry (SDP) and movable nodes (SCP). Moreover, we 
-demonstrate the performance improvements in structural compliance achieved  through the proposed SCP framework.
-
-To comprehensively evaluate the performance of SCP and SDP, we conduct comparisons across different discretization levels using 16, 12, and 8 sectors. This parametric study reveals how the benefits of geometry optimization vary with mesh density and helps identify scenarios where joint topology-geometry optimization provides the most significant improvements.
 
 
-% 图片代码
-\begin{figure}[htbp]
-    \centering
-    % 第一行
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{ground structure/level1.pdf}
-        \caption{Level 1 connections}
-        \label{fig:level1}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{ground structure/level2.pdf}
-        \caption{Level 2 connections}
-        \label{fig:level2}
-    \end{subfigure}
-    
-    \vspace{0.2cm}  % 行间距
-    
-    % 第二行
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{ground structure/level3.pdf}
-        \caption{Level 3 connections}
-        \label{fig:level3}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{ground structure/level123.pdf}
-        \caption{Complete ground structure (Levels 1-3)}
-        \label{fig:level123}
-    \end{subfigure}
-    
-    \caption{Ground structure connectivity : (a) Level 1 - adjacent node connections, (b) Level 2 - connections spanning two nodes, (c) Level 3 - connections spanning three nodes, (d) Complete ground structure with all connection levels}
-    \label{fig:ground_structure_complete}
-\end{figure}
+\subsection{Fixed Nodes (SDP) vs Moving Nodes (SCP)}
+
+In this section, we present a semicircular truss structure under hydrostatic loading  case to demonstrate the advantages of geometry optimization in dealing with  design-dependent pressure conditions. This is done by comparing solutions obtained with fixed nodes (SDP) and movable nodes (SCP). Moreover, we demonstrate the performance improvements in structural compliance achieved  through the proposed SCP framework.%这句需要修改
+
+To comprehensively evaluate the performance of SCP and SDP, we conduct comparisons across different discretization levels using 8, 12, 16, 20 sectors. This parametric study reveals how the benefits of geometry optimization vary with mesh density and helps identify scenarios where joint topology-geometry optimization provides the most significant improvements.
 
 
 
@@ -450,48 +409,65 @@ To comprehensively evaluate the performance of SCP and SDP, we conduct compariso
     \centering
     \makebox[0.49\textwidth]{\fontsize{10}{12}\selectfont\textbf{SDP}}\hfill
     \makebox[0.49\textwidth]{\fontsize{10}{12}\selectfont\textbf{SCP}}\\[0.5em]
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{sdp vs scp/sdp_16.pdf}
-        \caption{Compliance=585.6J  Effective members:126}
-        \label{fig:sdp_results_16}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{sdp vs scp/scp_16.pdf}
-        \caption{Compliance=479.7J Effective members:106}
-        \label{fig:scp_results_16}
-    \end{subfigure}  
-
-    \vspace{0.2cm}  % 行间距
 
     \begin{subfigure}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{sdp vs scp/sdp_12.pdf}
-        \caption{Compliance=647.8J Effective members:95}
-        \label{fig:sdp_results_12}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{sdp vs scp/scp_12.pdf}
-        \caption{Compliance=503.4J Effective members:80}
-        \label{fig:scp_results_12}
-    \end{subfigure} 
-
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{sdp vs scp/sdp_8.pdf}
-        \caption{Compliance=811.5J Effective members:96}
+        \includegraphics[width=\textwidth]{sdp vs scp/sdp_8.png}
+        \caption{Compliance: 87.43J Effective members: 65}
         \label{fig:sdp_results_8}
     \end{subfigure}
     \hfill
     \begin{subfigure}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{sdp vs scp/scp_8.pdf}
-        \caption{Compliance=552.0J Effective members:46}
+        \includegraphics[width=\textwidth]{sdp vs scp/scp_8.png}
+        \caption{Compliance: 43.95J Effective members: 65}
         \label{fig:scp_results_8}
+    \end{subfigure} 
+
+
+    \begin{subfigure}{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sdp vs scp/sdp_12.png}
+        \caption{Compliance: 92.15J Effective members:113}
+        \label{fig:sdp_results_12}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sdp vs scp/scp_12.png}
+        \caption{Compliance: 65.54J}
+        \label{fig:scp_results_12}
+    \end{subfigure} 
+    
+    \begin{subfigure}{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sdp vs scp/sdp_16.png}
+        \caption{Compliance: 86.75J  Effective members:152}
+        \label{fig:sdp_results_16}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sdp vs scp/scp_16.png}
+        \caption{Compliance: 64.13J}
+        \label{fig:scp_results_16}
+    \end{subfigure}  
+
+    %\vspace{0.2cm}  % 行间距
+
+
+    \begin{subfigure}{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sdp vs scp/sdp_20.png}
+        \caption{Compliance: 83.36J Effective members:185}
+        \label{fig:sdp_results_8}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{sdp vs scp/scp_20.png}
+        \caption{Compliance: 70.68J}
+        \label{fig:scp_results_20}
     \end{subfigure} 
 
     \caption{SDP vs SCP}
@@ -499,7 +475,7 @@ To comprehensively evaluate the performance of SCP and SDP, we conduct compariso
 \end{figure}
 
 
-It is obvious from Fig\ref{fig:sdp_scp_comparison} that across all discretizations, the SCP consistently achieve lower compliance than the fixed-geometry SDP baselines. Measured at the same volume and visualization filter ($A_i \ge 0.001A_{\max}$), the relative improvements of SCP over SDP increase as the sector number decreases (i.e., as the angular discretization becomes coarser), The computational statistics for all cases are presented in Table\ref{tab:compliance_comparison}.
+It is obvious from Fig.\ref{fig:sdp_scp_comparison} that across all discretizations, the SCP consistently achieve lower compliance than the fixed-geometry SDP baselines with an average improvement of 29.98\%.  The computational statistics for all cases are presented in Table\ref{tab:compliance_comparison}. The relative improvements of SCP over SDP increase as the sector number decreases (i.e., as the angular discretization becomes coarser),
 
 \begin{table}[htbp]
 \centering
@@ -509,75 +485,63 @@ It is obvious from Fig\ref{fig:sdp_scp_comparison} that across all discretizatio
 \toprule
 Sectors & SDP Compliance (J) & SCP Compliance (J) & Improvement (\%) \\
 \midrule
-16 & 585.6 & 479.7 & 18.1 \\
-12 & 647.8 & 503.4 & 22.3 \\
-8  & 811.5 & 552.0 & 32.0 \\
+8  & 87.43 & 43.95 & 49.7 \\
+12 & 92.15 & 65.54 & 28.9 \\
+16 & 86.75 & 64.13 & 26.1 \\
+20 & 83.36 & 70.68 & 15.2 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+
 \begin{figure}[htbp]
     \centering
-    % 列标题
-    \makebox[0.49\textwidth]{\large\textbf{SDP}}\hfill
-    \makebox[0.49\textwidth]{\large\textbf{SCP}}\\[0.5em]
-    
-    % 第一行：16扇形
+
+    % ---- 第一行 ----
     \begin{subfigure}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{area distribution/sdp_16_area.pdf}
-        \caption{SDP - 16 sectors}
-        \label{fig:sdp_16_area}
+        \includegraphics[width=\textwidth]{{area distribution/area_histogram_scp_vs_sdp_8.png}}
+        \caption{8 sectors}
+        \label{fig:area_8}
     \end{subfigure}
     \hfill
     \begin{subfigure}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{area distribution/scp_16_area.pdf}
-        \caption{SCP - 16 sectors}
-        \label{fig:scp_16_area}
+        \includegraphics[width=\textwidth]{{area distribution/area_histogram_scp_vs_sdp_12.png}}
+        \caption{12 sectors}
+        \label{fig:area_12}
     \end{subfigure}
-    
+
     \vspace{0.3cm}
-    
-    % 第二行：12扇形
+
+    % ---- 第二行 ----
     \begin{subfigure}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{area distribution/sdp_12_area.pdf}
-        \caption{SDP - 12 sectors}
-        \label{fig:sdp_12_area}
+        \includegraphics[width=\textwidth]{{area distribution/area_histogram_scp_vs_sdp_16.png}}
+        \caption{16 sectors}
+        \label{fig:area_16}
     \end{subfigure}
     \hfill
     \begin{subfigure}{0.49\textwidth}
         \centering
-        \includegraphics[width=\textwidth]{area distribution/scp_12_area.pdf}
-        \caption{SCP - 12 sectors}
-        \label{fig:scp_12_area}
+        \includegraphics[width=\textwidth]{{area distribution/area_histogram_scp_vs_sdp_20.png}}
+        \caption{20 sectors}
+        \label{fig:area_20}
     \end{subfigure}
-    
-    \vspace{0.3cm}
-    
-    % 第三行：8扇形
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{area distribution/sdp_8_area.pdf}
-        \caption{SDP - 8 sectors}
-        \label{fig:sdp_8_area}
-    \end{subfigure}
-    \hfill
-    \begin{subfigure}{0.49\textwidth}
-        \centering
-        \includegraphics[width=\textwidth]{area distribution/scp_8_area.pdf}
-        \caption{SCP - 8 sectors}
-        \label{fig:scp_8_area}
-    \end{subfigure}
-    
-    \caption{Cross-sectional area distribution comparison between SDP and SCP across different sector discretizations}
+
+    \caption{Cross-sectional area distribution comparison between SCP and SDP across different sector discretizations}
     \label{fig:area_distribution_comparison}
 \end{figure}
 
-Fig.\ref{fig:area_distribution_comparison} examines the cross-sectional area distributions. SDP exhibits a characteristic bimodal pattern with members concentrated near both the removal threshold (0-1000 mm²) and maximum area limit (10,000 mm²). This pattern intensifies as discretization becomes coarser, with the 8-sector case showing 18 near-threshold members.
+Fig.\ref{fig:sdp_scp_comparison} and fig.\ref{fig:area_distribution_comparison} clearly shows that the optimal design strongly depends on the initial configuration of the nodes similar to other researches on truss geometry and topology optimization \cite{weldeyesus2020truss}. Fig.\ref{fig:area_distribution_comparison} reveals a consistent trend across all discretizations: as the number of sectors decreases, the SCP layouts show a stronger concentration of large cross-sectional areas, while the SDP designs remain broadly distributed. This redistribution pattern mirrors the compliance improvements summarized in Table~\ref{tab:compliance_comparison}, where the relative gains range from nearly 50\% at eight sectors to around 15\% at twenty sectors.
 
-SCP demonstrates a more balanced distribution across intermediate areas (2000-6000 mm²), with only 4 near-threshold members in the 8-sector case. This selective material allocation explains how SCP achieves superior performance with fewer active members (46 vs 96 effective members for 8 sectors).
+The performance difference mainly stems from geometric adaptability. In the fixed-geometry SDP, the material redistribution is constrained by the preset node locations, leading to many mid-sized members that contribute little to overall stiffness. Allowing nodal adjustments in SCP introduces additional degrees of freedom, enabling the optimizer to consolidate material into a smaller set of effective members while removing redundant ones through node merging. This yields a more efficient allocation under the same volume constraint.
+
+As the discretization becomes finer (16–20 sectors), the two histograms converge, indicating that the geometric flexibility plays a smaller role when the initial layout is already dense. Even so, SCP continues to simplify the structure by reducing the total number of active members while maintaining slightly lower compliance. This demonstrates that incorporating geometry variation into the convex subproblem sequence remains beneficial even when topological freedom is limited.
+
+
+
+
 
 \subsection{Parameter Sensitivity Analysis}
 

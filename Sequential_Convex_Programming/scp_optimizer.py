@@ -36,6 +36,8 @@ class SequentialConvexTrussOptimizer:
                  enable_middle_layer=False, middle_layer_ratio=0.85,
                  enable_aasi: bool = False,
                  polar_rings: 'Optional[list]' = None,
+                 k_theta_steps: int = 2,
+                 output_dir: 'Optional[str]' = None,
                  simple_loads: bool = False,
                  enforce_symmetry: bool = False,
                  enable_symmetry_repair: bool = False,
@@ -54,6 +56,15 @@ class SequentialConvexTrussOptimizer:
         # 是否启用对称约束
         self.enable_symmetry = bool(enforce_symmetry)
         self.enable_symmetry_repair = bool(enable_symmetry_repair)
+        # 输出目录（用于优化日志等）
+        self.output_dir = None
+        try:
+            if output_dir is not None:
+                p = Path(str(output_dir))
+                p.mkdir(parents=True, exist_ok=True)
+                self.output_dir = str(p)
+        except Exception:
+            self.output_dir = None
 
         # 1. 初始化基础系统
         polar_config = {"rings": polar_rings} if polar_rings else None
@@ -65,6 +76,7 @@ class SequentialConvexTrussOptimizer:
             volume_fraction=volume_fraction,
             enable_middle_layer=enable_middle_layer,
             middle_layer_ratio=middle_layer_ratio,
+            k_theta_steps=int(k_theta_steps),
             polar_config=polar_config if polar_config is not None else {},
             simple_loads=bool(simple_loads),
         )
@@ -1600,7 +1612,9 @@ class SequentialConvexTrussOptimizer:
         try:
             from .load_calculator_with_shell import LoadCalculatorWithShell
             shell_params = dict(getattr(self, 'shell_params', {}) or {})
-            shell_params['outer_radius'] = self.radius
+            # Ensure shell outer radius so that inner wall coincides with truss radius
+            thickness = float(shell_params.get('thickness', 0.1))
+            shell_params['outer_radius'] = float(self.radius + thickness)
             shell_params['depth'] = self.depth
             simple_mode = bool(getattr(self, 'use_simple_loads', False))
             self.load_calc = LoadCalculatorWithShell(
@@ -1767,6 +1781,15 @@ class SequentialConvexTrussOptimizer:
         字段包含：迭代号、phase、α（SPD/最终）、试探记录、ρ、cond、步长范数、信赖域变化、是否接受、柔度等。
         """
         try:
+            # 解析目标路径：若配置了 output_dir，则将文件写到该目录
+            target_path = filepath
+            try:
+                base = os.path.basename(filepath)
+                outdir = getattr(self, 'output_dir', None)
+                if outdir:
+                    target_path = os.path.join(outdir, base)
+            except Exception:
+                pass
             headers = [
                 'iteration', 'phase',
                 'alpha_spd_final', 'alpha_final',
@@ -1778,8 +1801,9 @@ class SequentialConvexTrussOptimizer:
                 'current_compliance_before', 'actual_compliance', 'predicted_compliance',
                 'improvement_percent'
             ]
-            file_exists = os.path.exists(filepath)
-            with open(filepath, 'a', newline='', encoding='utf-8') as f:
+            os.makedirs(os.path.dirname(target_path) or '.', exist_ok=True)
+            file_exists = os.path.exists(target_path)
+            with open(target_path, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=headers)
                 if not file_exists:
                     writer.writeheader()
