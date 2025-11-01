@@ -51,6 +51,20 @@ def parse_args(argv=None):
     p.add_argument('--shell-debug-log', type=str, default=None, help='Optional path to log shell support mapping/loading diagnostics')
     p.add_argument('--node-merge-threshold', type=float, default=None,
                    help='Override node merge distance threshold (meters); defaults to optimizer value (0.2 m)')
+    # Collinear melt (post-processing cleanup for final figure/export)
+    p.add_argument('--enable-collinear-melt', action='store_true',
+                   help='Post-process final structure: replace i-j, j-k collinear pairs (valence=2) with i-k')
+    p.add_argument('--collinear-mode', type=str, default='volume', choices=['volume', 'stiffness'],
+                   help="Area rule for melted member: 'volume' (default) or 'stiffness'")
+    p.add_argument('--collinear-tol', type=float, default=1e-2,
+                   help='Collinearity tolerance (|cross| <= tol*|v1|*|v2|)')
+    p.add_argument('--collinear-minlen', type=float, default=1e-2,
+                   help='Minimum segment length for melt (meters)')
+    # Iterative collinear melt (integrate into optimization loop)
+    p.add_argument('--enable-collinear-melt-iter', action='store_true',
+                   help='Integrate collinear melt into optimization loop (applied after accepted steps)')
+    p.add_argument('--collinear-iter-phase', type=str, default='ABC', choices=['A','B','C','AB','BC','ABC'],
+                   help="Phases to apply iterative collinear melt (default 'B')")
     p.add_argument('--export-shell-metrics', type=str, default=None,
                    help='Optional CSV path to append shell displacement/reaction metrics after the run')
     p.add_argument('--shell-metrics-label', type=str, default=None,
@@ -60,11 +74,11 @@ def parse_args(argv=None):
     # Shell displacement visualization controls
     p.add_argument('--shell-disp-scale', type=float, default=None,
                    help='Override shell displacement magnification factor (auto if omitted)')
-    p.add_argument('--shell-disp-unit', type=str, default='m',
+    p.add_argument('--shell-disp-unit', type=str, default='mm',
                    help="Displacement colorbar unit: 'm' or 'mm' (default: m)")
-    p.add_argument('--shell-disp-cbar-min-mm', type=float, default=None,
+    p.add_argument('--shell-disp-cbar-min-mm', type=float, default=0.0,
                    help='Fix colorbar min (mm). Useful for cross-run comparison')
-    p.add_argument('--shell-disp-cbar-max-mm', type=float, default=None,
+    p.add_argument('--shell-disp-cbar-max-mm', type=float, default=0.50,
                    help='Fix colorbar max (mm). Useful for cross-run comparison')
     p.add_argument('--shell-disp-cmap', type=str, default='viridis_r',
                    help="Colormap name for displacement (default 'viridis_r' for light=low, dark=high)")
@@ -212,9 +226,208 @@ def _export_element_metrics(opt, csv_path: str) -> bool:
         w.writerow(header)
         w.writerows(rows)
     return True
-    if getattr(load_calc, 'simple_mode', False) or not getattr(load_calc, 'enable_shell', False):
-        print('Shell metrics skipped: shell FEA disabled (simple loads mode).')
+
+
+def _export_axial_forces(opt, csv_path: str, theta=None, areas=None, force_tol: float = None) -> bool:
+    """Export per-element axial force table and tension/compression classification."""
+    try:
+        import numpy as np
+        import csv
+    except Exception:
         return False
+
+    if not hasattr(opt, '_compute_member_forces_and_lengths'):
+        raise RuntimeError('Optimizer cannot compute member forces')
+
+    if areas is None:
+        areas = getattr(opt, 'final_areas', None)
+        if areas is None:
+            areas = getattr(opt, 'current_areas', None)
+    if theta is None:
+        theta = getattr(opt, 'final_angles', None)
+        if theta is None:
+            theta = getattr(opt, 'current_angles', None)
+    if theta is None or areas is None:
+        raise RuntimeError('Angles or areas unavailable for axial force export')
+
+    theta = np.asarray(theta, dtype=float)
+    areas = np.asarray(areas, dtype=float)
+
+    N, lengths = opt._compute_member_forces_and_lengths(theta, areas)
+    N = np.asarray(N, dtype=float)
+    lengths = np.asarray(lengths, dtype=float)
+
+    elems = list(getattr(getattr(opt, 'geometry', opt), 'elements', []) or getattr(opt, 'elements', []) or [])
+    if not elems:
+        raise RuntimeError('No elements available for axial force export')
+
+    if force_tol is None:
+        max_abs = float(np.nanmax(np.abs(N))) if N.size else 0.0
+        force_tol = max(1e-6, 1e-8 * max_abs) if np.isfinite(max_abs) and max_abs > 0.0 else 1e-6
+    else:
+        force_tol = float(force_tol)
+
+    rows = []
+    counts = {'compression': 0, 'tension': 0, 'near_zero': 0}
+    active_counts = {'compression': 0, 'tension': 0, 'near_zero': 0}
+    thr_area = float(getattr(opt, 'removal_threshold', 0.0) or 0.0)
+    for eid, pair in enumerate(elems):
+        n1, n2 = int(pair[0]), int(pair[1])
+        n_val = float(N[eid]) if eid < len(N) else float('nan')
+        a_val = float(areas[eid]) if eid < len(areas) else float('nan')
+        L_val = float(lengths[eid]) if eid < len(lengths) else float('nan')
+        if not np.isfinite(n_val):
+            cls = 'near_zero'
+        elif n_val > force_tol:
+            cls = 'tension'
+        elif n_val < -force_tol:
+            cls = 'compression'
+        else:
+            cls = 'near_zero'
+        counts[cls] = counts.get(cls, 0) + 1
+        active = int(np.isfinite(a_val) and a_val > thr_area)
+        if active:
+            active_counts[cls] = active_counts.get(cls, 0) + 1
+        abs_force = abs(n_val) if np.isfinite(n_val) else float('nan')
+        sigma = (n_val / a_val) if np.isfinite(n_val) and np.isfinite(a_val) and a_val not in (0.0, -0.0) else float('nan')
+        rows.append([eid, n1, n2, n_val, abs_force, cls, L_val, a_val, sigma, active])
+
+    out_path = Path(csv_path)
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    header = ['eid', 'node_i', 'node_j', 'axial_force_N', 'abs_force_N', 'classification', 'length_m', 'area_m2', 'sigma_Pa', 'active']
+    with out_path.open('w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(rows)
+
+    print(f"Axial forces saved to: {out_path} (compression={counts['compression']} / active={active_counts['compression']}, "
+          f"tension={counts['tension']} / active={active_counts['tension']}, "
+          f"near_zero={counts['near_zero']} / active={active_counts['near_zero']})")
+    return True
+
+
+def _build_tc_overlay(opt, node_coords: np.ndarray, areas: np.ndarray,
+                      min_area: float = 0.0) -> tuple:
+    """Build colored overlay segments for shell figure based on axial force sign.
+
+    Returns (segments, kwargs) where:
+      - segments: (M, 2, 2) array of line endpoints
+      - kwargs: dict containing 'colors' and 'linewidths' arrays
+
+    Convention: compression -> red, tension -> blue.
+    """
+    try:
+        import numpy as _np
+    except Exception:
+        return None, None
+
+    node_coords = _np.asarray(node_coords, dtype=float)
+    areas = _np.asarray(areas, dtype=float)
+    thr = float(min_area or 0.0)
+
+    # Resolve elements list
+    elems = getattr(opt, 'elements', None)
+    if elems is None:
+        elems = getattr(getattr(opt, 'geometry', opt), 'elements', None)
+    if not elems:
+        return None, None
+
+    # Compute axial forces N and lengths L robustly
+    N = None
+    L = None
+    # Preferred path: use optimizer helper if available (SCP)
+    theta_use = getattr(opt, 'final_angles', None)
+    if theta_use is None:
+        theta_use = getattr(opt, 'current_angles', None)
+    if hasattr(opt, '_compute_member_forces_and_lengths'):
+        try:
+            N, L = opt._compute_member_forces_and_lengths(
+                _np.asarray(theta_use, dtype=float) if theta_use is not None else _np.asarray([]),
+                areas,
+            )
+            N = _np.asarray(N, dtype=float)
+            L = _np.asarray(L, dtype=float)
+        except Exception:
+            N = None
+
+    # Fallback for SDP: reconstruct K from unit stiffness matrices and solve u
+    if N is None:
+        try:
+            # Build geometry directions/lengths
+            def _len_dir(p1, p2):
+                dx = p2[0] - p1[0]; dy = p2[1] - p1[1]
+                l = float(_np.hypot(dx, dy))
+                if l <= 1e-16:
+                    return 0.0, _np.array([1.0, 0.0])
+                return l, _np.array([dx/l, dy/l])
+
+            L = _np.zeros(len(elems), dtype=float)
+            dirs = _np.zeros((len(elems), 2), dtype=float)
+            for i, (n1, n2) in enumerate(elems):
+                L[i], dirs[i] = _len_dir(node_coords[n1], node_coords[n2])
+
+            # Assemble K from unit stiffness matrices if available
+            if hasattr(opt, 'unit_stiffness_matrices'):
+                n_dof = int(getattr(opt, 'n_dof', node_coords.shape[0] * 2))
+                K = _np.zeros((n_dof, n_dof))
+                for i, K_i in enumerate(getattr(opt, 'unit_stiffness_matrices')):
+                    a = float(areas[i]) if i < len(areas) else 0.0
+                    if a > 0.0:
+                        K += a * _np.asarray(K_i, dtype=float)
+                f = _np.asarray(getattr(opt, 'load_vector', _np.zeros(n_dof)), dtype=float)
+                # Apply boundary conditions if helper exists, else assume even DOFs free_dofs
+                if hasattr(opt, '_apply_boundary_conditions'):
+                    K_bc, f_bc, free_dofs = opt._apply_boundary_conditions(K, f)
+                else:
+                    free_dofs = _np.arange(n_dof)
+                    K_bc, f_bc = K, f
+                try:
+                    u_red = _np.linalg.solve(K_bc, f_bc)
+                except _np.linalg.LinAlgError:
+                    u_red = _np.linalg.pinv(K_bc, rcond=1e-10) @ f_bc
+                u_full = _np.zeros(n_dof)
+                u_full[free_dofs] = u_red
+                E = float(getattr(opt, 'E_steel', getattr(getattr(opt, 'material_data', None), 'E_steel', 210e9)))
+                N = _np.zeros(len(elems))
+                for i, (n1, n2) in enumerate(elems):
+                    u1 = _np.array([u_full[2*n1], u_full[2*n1+1]])
+                    u2 = _np.array([u_full[2*n2], u_full[2*n2+1]])
+                    axial_ext = float(_np.dot((u2 - u1), dirs[i]))
+                    L_i = max(float(L[i]), 1e-12)
+                    N[i] = (E * float(areas[i]) / L_i) * axial_ext
+        except Exception:
+            N = None
+
+    if N is None:
+        return None, None
+
+    # Build segments and per-segment styles
+    segs = []
+    colors = []
+    widths = []
+    A_max = float(getattr(opt, 'A_max', 1.0)) or 1.0
+    eps = 0.0  # treat zero as tension vs compression by sign only
+    for i, (n1, n2) in enumerate(elems):
+        a = float(areas[i]) if i < len(areas) else 0.0
+        if not _np.isfinite(a) or a <= thr:
+            continue
+        p1 = node_coords[n1]
+        p2 = node_coords[n2]
+        segs.append(_np.array([p1, p2], dtype=float))
+        colors.append('red' if float(N[i]) > eps else 'blue')
+        widths.append(0.5 + 2.0 * (a / A_max))
+
+    if not segs:
+        return None, None
+    segs = _np.asarray(segs, dtype=float)
+    return segs, {'colors': colors, 'linewidths': widths, 'alpha': 0.9}
+    """
+    The following block was part of a shell metrics exporter and was
+    accidentally inlined here. It is intentionally disabled.
+    """
     shell = getattr(load_calc, 'shell_fea', None)
     if shell is None:
         print('Shell metrics skipped: shell FEA instance missing.')
@@ -452,6 +665,18 @@ def main(argv=None):
         except Exception as exc:
             print(f"Warning: failed to apply node merge threshold ({exc}); using default {opt.node_merge_threshold}")
 
+    # Configure iterative collinear melt on optimizer (independent of final plotting cleanup)
+    try:
+        opt.enable_collinear_melt_iter = bool(args.enable_collinear_melt_iter)
+        opt.collinear_mode = str(args.collinear_mode)
+        opt.collinear_tol = float(args.collinear_tol)
+        opt.collinear_minlen = float(args.collinear_minlen)
+        opt.collinear_iter_phase = str(args.collinear_iter_phase)
+        if opt.enable_collinear_melt_iter:
+            print(f"Iterative collinear-melt enabled (phase={opt.collinear_iter_phase}, mode={opt.collinear_mode}, tol={opt.collinear_tol:g}, minlen={opt.collinear_minlen:g})")
+    except Exception as exc:
+        print(f"Warning: failed to configure iterative collinear-melt: {exc}")
+
     if args.shell_debug_log and getattr(opt, 'load_calc', None) is not None:
         enable_log = getattr(opt.load_calc, 'enable_debug_logging', None)
         if callable(enable_log):
@@ -481,8 +706,10 @@ def main(argv=None):
             # Uniform areas for baseline drawing
             areas0 = np.full(opt.n_elements, max(opt.A_min, 1e-4), dtype=float)
             fig, ax = plt.subplots(figsize=(8, 6))
-            viz._plot_structure(opt, ax, areas0, title="", linewidth_mode='uniform', node_coords=np.array(opt.nodes), min_area_to_draw=0.0)
-            plt.tight_layout(); plt.savefig(os.path.join(out_dir, "ground_structure.png"), dpi=300, bbox_inches='tight'); plt.close(fig)
+            viz._plot_structure(opt, ax, areas0, title="", linewidth_mode='uniform',
+                                node_coords=np.array(opt.nodes), min_area_to_draw=0.0,
+                                fill_nodes=False, style="ground_outline")
+            plt.tight_layout(); plt.savefig(os.path.join(out_dir, "ground_structure.pdf"), bbox_inches='tight'); plt.close(fig)
             pre_out = out_dir
         except Exception as e:
             print(f"Warning: failed saving pre-optimization ground structure: {e}")
@@ -529,8 +756,10 @@ def main(argv=None):
                 # Ground structure (baseline geometry with uniform areas)
                 areas0 = np.full(opt.n_elements, max(opt.A_min, 1e-4), dtype=float)
                 fig, ax = plt.subplots(figsize=(8, 6))
-                viz._plot_structure(opt, ax, areas0, title="", linewidth_mode='uniform', node_coords=np.array(opt.nodes), min_area_to_draw=0.0)
-                plt.tight_layout(); plt.savefig(os.path.join(out_dir, "ground_structure.png"), dpi=300, bbox_inches='tight'); plt.close(fig)
+                viz._plot_structure(opt, ax, areas0, title="", linewidth_mode='uniform',
+                                    node_coords=np.array(opt.nodes), min_area_to_draw=0.0,
+                                    fill_nodes=False, style="ground_outline")
+                plt.tight_layout(); plt.savefig(os.path.join(out_dir, "ground_structure.pdf"), bbox_inches='tight'); plt.close(fig)
 
                 # Final structure
                 if args.sdp_fixed_geometry:
@@ -556,26 +785,35 @@ def main(argv=None):
                         pass
                     title = "Single SDP Final Structure"
                 fig, ax = plt.subplots(figsize=(10, 6))
-                viz._plot_structure(opt, ax, A_new, title=title, linewidth_mode='variable', node_coords=coords_opt)
+                thr = float(getattr(opt, 'removal_threshold', 0.0) or 0.0)
+                viz._plot_structure(opt, ax, A_new, title=title, linewidth_mode='variable', node_coords=coords_opt, min_area_to_draw=thr, hide_isolated_nodes=True)
                 plt.tight_layout(); plt.savefig(os.path.join(out_dir, "final_structure.png"), dpi=300, bbox_inches='tight'); plt.close(fig)
+                try:
+                    _export_axial_forces(opt, os.path.join(out_dir, "axial_forces.csv"), theta=theta_k if args.sdp_fixed_geometry else theta_new, areas=A_new)
+                except Exception as exc:
+                    print(f"Warning: axial force export failed: {exc}")
 
                 # Shell displacement visualization (if shell FEA is active) with optional overlay
                 shell_fea = getattr(getattr(opt, 'load_calc', None), 'shell_fea', None)
                 if shell_fea and hasattr(shell_fea, 'visualize_last_solution'):
                     try:
-                        # Build overlay drawer to reuse project visualization styling
+                        # Use original overlay drawer, but pass axial forces for T/C coloring
+                        overlay_segments = None
+                        overlay_kwargs = {'color': 'navy', 'linewidths': 0.8, 'alpha': 0.5}
                         overlay_drawer = None
                         if bool(args.overlay_structure_on_shell):
                             try:
+                                from .visualization import TrussVisualization
                                 viz2 = TrussVisualization()
                                 areas_use = A_new
+
                                 thr = float(getattr(opt, 'removal_threshold', 0.0) or 0.0)
 
                                 def _drawer(ax):
                                     try:
                                         viz2._plot_structure(opt, ax, np.asarray(areas_use),
-                                                         title="", linewidth_mode='variable', node_coords=np.asarray(coords_opt),
-                                                         min_area_to_draw=thr, hide_isolated_nodes=True)
+                                                             title="", linewidth_mode='variable', node_coords=np.asarray(coords_opt),
+                                                             min_area_to_draw=thr, hide_isolated_nodes=True)
                                     except Exception:
                                         pass
 
@@ -597,8 +835,9 @@ def main(argv=None):
                             save_path=shell_fig,
                             cbar_range=cbar_range,
                             disp_unit=disp_unit,
+                            overlay_segments=overlay_segments,
+                            overlay_kwargs=overlay_kwargs,
                             overlay_truss_drawer=overlay_drawer,
-                            overlay_kwargs={'color': 'navy', 'linewidths': 0.8, 'alpha': 0.5},
                             show_title=bool(args.shell_disp_show_title),
                             cbar_fraction=(float(args.shell_disp_cbar_fraction) if args.shell_disp_cbar_fraction is not None else None),
                             cbar_shrink=(float(args.shell_disp_cbar_shrink) if args.shell_disp_cbar_shrink is not None else None)
@@ -784,6 +1023,46 @@ def main(argv=None):
             areas_final = getattr(opt, 'current_areas', None)
             if areas_final is None:
                 areas_final = np.full(opt.n_elements, max(opt.A_min, 1e-4), dtype=float)
+            if out_dir:
+                try:
+                    _export_axial_forces(opt, os.path.join(out_dir, "axial_forces.csv"), theta=theta_use, areas=areas_final)
+                except Exception as exc:
+                    print(f"Warning: axial force export failed: {exc}")
+            # Optional: collinear melt cleanup for final plotting
+            opt_for_plot = opt
+            areas_for_plot = np.asarray(areas_final, dtype=float)
+            if bool(args.enable_collinear_melt):
+                try:
+                    from tools.collinear_cleanup import melt_collinear, build_optimizer_view
+                    elems = [tuple(map(int, e)) for e in opt.elements]
+                    # Build whitelist from fixed DOFs and load nodes
+                    whitelist_nodes = []
+                    try:
+                        whitelist_nodes = sorted(set(int(d // 2) for d in getattr(opt, 'fixed_dofs', []) or []))
+                    except Exception:
+                        pass
+                    try:
+                        ln = getattr(getattr(opt, 'geometry', opt), 'load_nodes', []) or []
+                        whitelist_nodes = sorted(set(list(whitelist_nodes) + list(ln)))
+                    except Exception:
+                        pass
+                    elems_new, areas_new, merged = melt_collinear(
+                        nodes_xy=np.asarray(coords_opt, dtype=float),
+                        elements=elems,
+                        areas=np.asarray(areas_final, dtype=float),
+                        whitelist_nodes=whitelist_nodes,
+                        tol=float(args.collinear_tol),
+                        min_len=float(args.collinear_minlen),
+                        mode=str(args.collinear_mode),
+                        active_threshold=float(getattr(opt, 'removal_threshold', 0.0) or 0.0),
+                        a_max=float(getattr(opt, 'A_max', None)) if getattr(opt, 'A_max', None) is not None else None,
+                    )
+                    if merged:
+                        opt_for_plot = build_optimizer_view(opt, elems_new, areas_new)
+                        areas_for_plot = np.asarray(areas_new, dtype=float)
+                        print(f"[collinear-melt] merged {len(merged)} nodes into straight members")
+                except Exception as e:
+                    print(f"[collinear-melt] skipped due to error: {e}")
             # Print load nodes quick info for diagnosis
             ln = getattr(opt.geometry, 'load_nodes', []) or []
             if ln:
@@ -793,7 +1072,8 @@ def main(argv=None):
                 print(f"Load nodes: {len(ln)}; first id={ln[0]} at ({p0[0]:.3f},{p0[1]:.3f}), last id={ln[-1]} at ({p1[0]:.3f},{p1[1]:.3f})")
             # Emphasize line width dynamic range
             fig, ax = plt.subplots(figsize=(10, 6))
-            viz._plot_structure(opt, ax, areas_final, title="", linewidth_mode='variable', node_coords=coords_opt)
+            thr = float(getattr(opt, 'removal_threshold', 0.0) or 0.0)
+            viz._plot_structure(opt_for_plot, ax, areas_for_plot, title="", linewidth_mode='variable', node_coords=coords_opt, min_area_to_draw=thr, hide_isolated_nodes=True)
             plt.tight_layout(); plt.savefig(os.path.join(out_dir, "final_structure.png"), dpi=300, bbox_inches='tight'); plt.close(fig)
 
             # Load distribution
@@ -806,6 +1086,7 @@ def main(argv=None):
                 try:
                     shell_fig = os.path.join(out_dir, "shell_displacement.png")
                     overlay_segments = None
+                    overlay_kwargs = {'color': 'navy', 'linewidths': 0.8, 'alpha': 0.5}
                     overlay_drawer = None
                     if bool(args.overlay_structure_on_shell):
                         try:
@@ -815,14 +1096,15 @@ def main(argv=None):
                             theta_final = getattr(opt, 'final_angles', None)
                             if theta_final is not None:
                                 coords_overlay = opt._update_node_coordinates(np.asarray(theta_final, dtype=float))
+                                theta_for_force = np.asarray(theta_final, dtype=float)
                             else:
                                 theta_use = getattr(opt, 'current_angles', None)
                                 coords_overlay = opt._update_node_coordinates(np.asarray(theta_use, dtype=float)) if theta_use is not None else np.asarray(opt.nodes, dtype=float)
+                                theta_for_force = np.asarray(theta_use, dtype=float) if theta_use is not None else None
                             areas_use = getattr(opt, 'final_areas', None)
                             if areas_use is None:
                                 areas_use = getattr(opt, 'current_areas', None)
                             thr = float(getattr(opt, 'removal_threshold', 0.0) or 0.0)
-
                             def _drawer(ax):
                                 try:
                                     viz2._plot_structure(opt, ax, np.asarray(areas_use) if areas_use is not None else np.full(opt.n_elements, max(opt.A_min, 1e-4)),
@@ -849,7 +1131,7 @@ def main(argv=None):
                         cbar_range=cbar_range,
                         disp_unit=disp_unit,
                         overlay_segments=overlay_segments,
-                        overlay_kwargs={'color': 'navy', 'linewidths': 0.8, 'alpha': 0.5},
+                        overlay_kwargs=overlay_kwargs,
                         overlay_truss_drawer=overlay_drawer,
                         show_title=bool(args.shell_disp_show_title),
                         cbar_fraction=(float(args.shell_disp_cbar_fraction) if args.shell_disp_cbar_fraction is not None else None),

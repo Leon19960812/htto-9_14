@@ -138,6 +138,13 @@ class SequentialConvexTrussOptimizer:
         # 节点融合开关（默认禁用；逐步打通后可启用）
         self.enable_node_merge = True
         self.node_merge_threshold = 0.2
+        # 迭代内的“共线熔合”开关与参数（默认关闭；用于Phase B/C期间做安全拓扑清理）
+        self.enable_collinear_melt_iter = False
+        self.collinear_mode = 'volume'     # or 'stiffness'
+        self.collinear_tol = 1e-2
+        self.collinear_minlen = 1e-4
+        # 哪些阶段启用：'A','B','C','AB','BC','ABC'
+        self.collinear_iter_phase = 'ABC'
 
     # -------------------------------------------------------------
     # Utility: run a single SDP subproblem for diagnostics/benchmark
@@ -1295,8 +1302,17 @@ class SequentialConvexTrussOptimizer:
                             except Exception as _e:
                                 print(f"    Failed to recompute compliance after merge: {_e}")
                             
-                            print(f"   Recomputed cached stiffness matrices; {len(self.unit_stiffness_matrices)} elements total")                        
-                    
+                            print(f"   Recomputed cached stiffness matrices; {len(self.unit_stiffness_matrices)} elements total")
+                    # 共线熔合（迭代内拓扑清理；仅在允许的阶段触发）
+                    try:
+                        A_after_melt, changed = self._apply_iterative_collinear_melt(coords_latest, A_k)
+                        if changed:
+                            # 同步局部变量与当前状态
+                            A_k = np.asarray(A_after_melt, dtype=float)
+                            self.current_areas = A_k
+                    except Exception as _e:
+                        print(f"[CollinearMelt] error: {_e}")
+
                 else:
                     print("❌ Rejected step")
                     print(f"   Keeping current solution; compliance: {self.current_compliance:.6e}")
@@ -1720,6 +1736,142 @@ class SequentialConvexTrussOptimizer:
             self._shell_snapshot_count = idx + 1
         except Exception as exc:
             print(f"Warning: failed to save shell displacement figure: {exc}")
+
+    def _apply_iterative_collinear_melt(self, node_coords: np.ndarray, A_vec: np.ndarray) -> tuple:
+        """尝试在迭代中进行一次共线单元熔合（i–j, j–k -> i–k）。
+
+        输入：
+        - node_coords: 当前theta对应的节点坐标（n,2）
+        - A_vec: 与 self.geometry.elements 对齐的面积数组
+
+        返回：(A_new, changed: bool)
+        若未启用或不满足阶段条件，则直接返回 (A_vec, False)。
+        """
+        try:
+            if not getattr(self, 'enable_collinear_melt_iter', False):
+                return A_vec, False
+            phase = str(getattr(self, 'phase', 'A'))
+            allow = str(getattr(self, 'collinear_iter_phase', 'B')).upper()
+            if (allow == 'A' and phase != 'A') or \
+               (allow == 'B' and phase != 'B') or \
+               (allow == 'C' and phase != 'C') or \
+               (allow == 'AB' and phase not in ('A','B')) or \
+               (allow == 'BC' and phase not in ('B','C')) or \
+               (allow == 'ABC' and phase not in ('A','B','C')):
+                return A_vec, False
+        except Exception:
+            return A_vec, False
+
+        # 构造白名单：支撑节点、载荷节点不移除
+        try:
+            fixed_dofs = getattr(self, 'fixed_dofs', []) or []
+            whitelist_from_dofs = sorted(set(int(d // 2) for d in fixed_dofs))
+        except Exception:
+            whitelist_from_dofs = []
+        try:
+            ln = getattr(getattr(self, 'geometry', None), 'load_nodes', []) or []
+            whitelist_nodes = sorted(set(list(whitelist_from_dofs) + list(ln)))
+        except Exception:
+            whitelist_nodes = whitelist_from_dofs
+
+        # 执行熔合
+        try:
+            from tools.collinear_cleanup import melt_collinear
+            elems = [tuple(map(int, e)) for e in (self.geometry.elements or [])]
+            elems_new, A_new, merged = melt_collinear(
+                nodes_xy=np.asarray(node_coords, dtype=float),
+                elements=elems,
+                areas=np.asarray(A_vec, dtype=float),
+                whitelist_nodes=whitelist_nodes,
+                tol=float(getattr(self, 'collinear_tol', 1e-8)),
+                min_len=float(getattr(self, 'collinear_minlen', 1e-8)),
+                mode=str(getattr(self, 'collinear_mode', 'volume')),
+                active_threshold=float(getattr(self, 'removal_threshold', 0.0) or 0.0),
+                a_max=float(getattr(self, 'A_max', None)) if getattr(self, 'A_max', None) is not None else None,
+            )
+        except Exception as e:
+            print(f"[CollinearMelt] skipped due to error: {e}")
+            return A_vec, False
+
+        if not merged:
+            return A_vec, False
+
+        # 应用到几何与优化器状态
+        try:
+            # 更新几何元素
+            new_elements = [list(map(int, p)) for p in elems_new]
+            self.geometry.elements = new_elements
+            self.geometry.n_elements = len(new_elements)
+            # 同步到 initializer 的几何（与 node_merge 对齐）
+            try:
+                if hasattr(self, 'initializer') and getattr(self.initializer, 'geometry', None) is not None:
+                    self.initializer.geometry = self.geometry
+            except Exception:
+                pass
+            # 同步别名
+            self.elements = self.geometry.elements
+            self.n_elements = self.geometry.n_elements
+            # 节点与集合（节点不变，但保持引用一致）
+            try:
+                self.nodes = self.geometry.nodes
+                self.load_nodes = getattr(self.geometry, 'load_nodes', [])
+                self.inner_nodes = getattr(self.geometry, 'inner_nodes', [])
+                if hasattr(self.geometry, 'middle_nodes'):
+                    self.middle_nodes = getattr(self.geometry, 'middle_nodes')
+            except Exception:
+                pass
+            # 重新计算几何、刚度基元
+            self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+            self.unit_stiffness_matrices = self.stiffness_calc.precompute_unit_stiffness_matrices(
+                self.geometry, self.element_lengths
+            )
+            # 同步到 PolarGeometry 作为唯一真源
+            try:
+                if hasattr(self, 'polar_geometry') and self.polar_geometry is not None:
+                    self.polar_geometry.rebuild_from_geometry(self.geometry)
+            except Exception as _e:
+                print(f"    Failed to sync PolarGeometry after collinear-melt: {_e}")
+            # 重新计算边界条件（与 node_merge 对齐）
+            try:
+                if hasattr(self, 'constraint_calc') and self.constraint_calc is not None:
+                    fixed_dofs, free_dofs = self.constraint_calc.setup_boundary_conditions(self.geometry)
+                    self.fixed_dofs = fixed_dofs
+                    self.free_dofs = free_dofs
+            except Exception as _e:
+                print(f"    Failed to rebuild boundary conditions after collinear-melt: {_e}")
+            # 需要时刷新对称约束与 θ 步长帽
+            try:
+                if bool(getattr(self, 'enable_symmetry', False)) and getattr(self, 'theta_node_ids', None):
+                    self._prepare_symmetry_constraints(self.theta_node_ids)
+            except Exception as _e:
+                print(f"    Failed to rebuild symmetry constraints after collinear-melt: {_e}")
+            try:
+                n_theta = len(self.theta_node_ids) if getattr(self, 'theta_node_ids', None) else (len(self.current_angles) if getattr(self, 'current_angles', None) is not None else 0)
+                if n_theta > 0:
+                    self._update_theta_move_caps(n_theta)
+            except Exception:
+                pass
+            # 更新当前面积与缓存
+            A_new = np.asarray(A_new, dtype=float)
+            self.current_areas = A_new
+            # 强制重线性化
+            self._clear_linearization_cache()
+            # 载荷计算器（可能不需要，但与 node_merge 对齐重建一次更稳妥）
+            try:
+                self._reinitialize_load_calculator()
+            except Exception as _e:
+                print(f"    Failed to reinitialize load calculator after collinear-melt: {_e}")
+            # 合并后重算柔度，保证一致
+            try:
+                self.current_compliance = self.system_calculator.compute_actual_compliance(self.current_angles, A_new)
+                print(f"   Re-evaluated compliance after collinear-melt: {self.current_compliance:.6e}")
+            except Exception as _e:
+                print(f"    Failed to recompute compliance after collinear-melt: {_e}")
+            print(f"[CollinearMelt] merged {len(merged)} node(s) into straight members; elements now {self.n_elements}")
+            return A_new, True
+        except Exception as e:
+            print(f"[CollinearMelt] failed to apply changes: {e}")
+            return A_vec, False
 
 
     def _export_iteration_state_logs(self, export_dir: str = 'results') -> None:

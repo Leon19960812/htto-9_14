@@ -395,7 +395,9 @@ Verification:
         
         print("=" * 60)
     
-    def _plot_structure(self, optimizer, ax, areas, title, linewidth_mode='variable', node_coords=None, min_area_to_draw=None, hide_isolated_nodes: bool = False):
+    def _plot_structure(self, optimizer, ax, areas, title, linewidth_mode='variable', node_coords=None,
+                        min_area_to_draw=None, hide_isolated_nodes: bool = False, axial_forces=None,
+                        fill_nodes: bool = True, style: str = "default"):
         """绘制结构"""
         if node_coords is None:
             node_coords = np.array(optimizer.nodes)
@@ -431,24 +433,33 @@ Verification:
                 active_node_mask[int(node2)] = True
                 
                 area_ratio = area / optimizer.A_max
-                alpha = 1
+                if style == "ground_outline":
+                    line_color = "#444444"
+                    alpha = 0.6
+                else:
+                    line_color = 'darkblue'
+                    alpha = 1
                 
                 # 根据模式设置线宽
                 if linewidth_mode == 'uniform':
                     linewidth = 1
-                    color = 'black'
+                    color = line_color if style == "ground_outline" else 'black'
                 elif linewidth_mode == 'fine':
                     linewidth = 0.5 + 2.0 * area_ratio
-                    color = 'darkblue'
+                    color = line_color
                 else:  # 'variable'
                     linewidth = 0.5 + 2.0 * area_ratio
-                    color = 'darkblue'
-                
-                ax.plot([x1, x2], [y1, y2], color=color, 
+                    color = line_color
+
+                # 如果提供了轴力，按受压/受拉着色（受压=红，受拉=蓝，近零=灰）
+                ax.plot([x1, x2], [y1, y2], color=color,
                     linewidth=linewidth, alpha=alpha)
         
         # 绘制节点（保持原有配色和逻辑）
         nodes_array = node_coords
+        fill_nodes_local = fill_nodes
+        if style == "ground_outline":
+            fill_nodes_local = False
         
         # 外层节点（荷载点）
         load_nodes = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
@@ -456,9 +467,17 @@ Verification:
             load_nodes = [n for n in load_nodes if active_node_mask[int(n)]]
         outer_coords = nodes_array[load_nodes] if len(load_nodes) else np.empty((0, 2))
         if outer_coords.size:
-            ax.scatter(outer_coords[:, 0], outer_coords[:, 1], 
-                    c='red', s=60, marker='o', edgecolors='black', 
-                    label='Load Points', zorder=5)
+            load_kwargs = dict(zorder=5)
+            if style == "ground_outline":
+                load_kwargs.update(s=120, marker='o', facecolors='none',
+                                   edgecolors='black', linewidths=2.0, label='Load Points')
+            else:
+                load_kwargs.update(s=60, marker='o', label='Load Points')
+                if fill_nodes_local:
+                    load_kwargs.update(c='red', edgecolors='black')
+                else:
+                    load_kwargs.update(facecolors='none', edgecolors='red', linewidths=1.5)
+            ax.scatter(outer_coords[:, 0], outer_coords[:, 1], **load_kwargs)
         
         # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
         support_nodes = self._get_support_nodes(optimizer)
@@ -475,9 +494,17 @@ Verification:
                 mask_other = mask_other & active_node_mask
             other_coords = nodes_array[mask_other]
             if other_coords.size:
-                ax.scatter(other_coords[:, 0], other_coords[:, 1],
-                           c='green', s=30, marker='o', edgecolors='black', alpha=0.8,
-                           label='Other Nodes', zorder=4)
+                other_kwargs = dict(marker='o', alpha=0.8,
+                                    label='Other Nodes', zorder=4)
+                if style == "ground_outline":
+                    other_kwargs.update(s=80, facecolors='none', edgecolors='black', linewidths=2.0)
+                else:
+                    other_kwargs.update(s=30)
+                    if fill_nodes_local:
+                        other_kwargs.update(c='green', edgecolors='black')
+                    else:
+                        other_kwargs.update(facecolors='none', edgecolors='black', linewidths=1.2)
+                ax.scatter(other_coords[:, 0], other_coords[:, 1], **other_kwargs)
         except Exception:
             pass
 
@@ -486,14 +513,24 @@ Verification:
             support_nodes = [n for n in support_nodes if active_node_mask[int(n)]]
         support_coords = nodes_array[support_nodes] if len(support_nodes) else np.empty((0, 2))
         if support_coords.size:
-            ax.scatter(support_coords[:, 0], support_coords[:, 1], 
-                    c='blue', s=80, marker='^', edgecolors='black', 
-                    label='Fixed Supports', zorder=6)
+            support_kwargs = dict(marker='^', label='Fixed Supports', zorder=6)
+            if style == "ground_outline":
+                support_kwargs.update(s=140, facecolors='none', edgecolors='black', linewidths=2.5)
+            else:
+                support_kwargs.update(s=80)
+                if fill_nodes_local:
+                    support_kwargs.update(c='blue', edgecolors='black')
+                else:
+                    support_kwargs.update(facecolors='none', edgecolors='blue', linewidths=1.5)
+            ax.scatter(support_coords[:, 0], support_coords[:, 1], **support_kwargs)
         
         ax.set_xlim(-1.2 * optimizer.radius, 1.2 * optimizer.radius)
         ax.set_ylim(-0.2 * optimizer.radius, 1.2 * optimizer.radius)
         ax.set_aspect('equal')
-        ax.grid(True, alpha=0.3)
+        # ax.grid(True, alpha=0.3)
+        ax.grid(False)
+        ax.axis('off')
+        
         ax.legend()
         if title:
             ax.set_title(title, fontweight='bold')
@@ -811,7 +848,8 @@ Verification:
         
         # 使用现有方法绘制
         self._plot_structure(mock_optimizer, ax, mock_optimizer.final_areas, 
-                            title="Ground Structure", linewidth_mode='uniform')
+                            title="Ground Structure", linewidth_mode='uniform',
+                            fill_nodes=False, style="ground_outline")
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')

@@ -152,7 +152,7 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+    colors = ['#EFB600', '#F04F5E', '#566BF0', '#36984D', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
     for i, s in enumerate(series_list):
         x = np.arange(len(s))

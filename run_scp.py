@@ -106,3 +106,25 @@ if __name__ == '__main__':
 
 # sdp_fixed_problems
 # python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 2 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 80 --enforce-symmetry --overlay-structure-on-shell --shell-disp-unit mm --shell-disp-cbar-min-mm 0 --shell-disp-cbar-max-mm 0.50 --shell-disp-scale 20 --export-element-metrics results_scp_8_k2/element_metrics.csv --save-figs results_scp_8_k2 | tee log_scp_8_k2.txt
+
+# 10.21运行文件
+# python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 1 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_8_k1/element_metrics.csv --save-figs  results_scp_8_k1 --output-dir results_scp_8_k1 | Tee-Object results_scp_8_k1/log_scp_8_k1.txt   
+# python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 2 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_8_k2/element_metrics.csv --save-figs  results_scp_8_k2 --output-dir results_scp_8_k2 | Tee-Object results_scp_8_k2/log_scp_8_k2.txt 
+# python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 3 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_8_k3/element_metrics.csv --save-figs  results_scp_8_k3 --output-dir results_scp_8_k3 | Tee-Object results_scp_8_k3/log_scp_8_k3.txt
+# python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 4 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_8_k4/element_metrics.csv --save-figs  results_scp_8_k4 --output-dir results_scp_8_k4 | Tee-Object results_scp_8_k4/log_scp_8_k4.txt
+
+# python -u run_scp.py --radius 5.0 --n-sectors 12 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 4 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_12_k4/element_metrics.csv --save-figs  results_scp_12_k4 --output-dir results_scp_12_k4 | Tee-Object results_scp_12_k4/log_scp_12_k4.txt
+# python -u run_scp.py --radius 5.0 --n-sectors 12 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 3 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_12_k3/element_metrics.csv --save-figs  results_scp_12_k3 --output-dir results_scp_12_k3 | Tee-Object results_scp_12_k3/log_scp_12_k3.txt
+
+# python compare_histograms.py 
+
+
+# 10.24运行文件
+# python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 4 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --single-subproblem --sdp-fixed-geometry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_sdp_8_k4/element_metrics.csv --save-figs  results_sdp_8_k4 --output-dir results_sdp_8_k4 | Tee-Object results_sdp_8_k4/log_sdp_8_k4.txt
+
+# --enable-aasi
+
+# python -u run_scp.py --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --enable-aasi --k-theta-steps 1 --middle-layer-ratio 0.8 --volume-fraction 0.2 --max-iterations 200 --enforce-symmetry --overlay-structure-on-shell --shell-disp-scale 20 --enable-collinear-melt-iter --export-element-metrics results_scp_8_b_k1/element_metrics.csv --save-figs  results_scp_8_b_k1 --output-dir results_scp_8_b_k1 | Tee-Object results_scp_8_b_k1/log_scp_8_b_k1.txt   
+
+# 10.27运行命令
+# python -m Sequential_Convex_Programming.cli --max-iterations 0 --radius 5.0 --n-sectors 8 --inner-ratio 0.6 --enable-middle-layer --k-theta-steps 2 --middle-layer-ratio 0.8 --save-figs results/ground_only

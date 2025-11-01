@@ -563,10 +563,14 @@ class Shell2DFEA:
                 segs = np.asarray(overlay_segments, dtype=float)
                 if segs.ndim == 3 and segs.shape[-2:] == (2, 2):
                     okw = overlay_kwargs or {}
-                    color = okw.get('color', 'navy')
+                    # Support either a single color or a per-segment color array
+                    colors = okw.get('colors', None)
+                    if colors is None:
+                        colors = okw.get('color', 'navy')
                     linewidths = okw.get('linewidths', 1.0)
                     alpha = okw.get('alpha', 0.9)
-                    ax.add_collection(LineCollection(segs, colors=color, linewidths=linewidths, alpha=alpha))
+                    lc = LineCollection(segs, colors=colors, linewidths=linewidths, alpha=alpha)
+                    ax.add_collection(lc)
             except Exception:
                 pass
 

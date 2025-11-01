@@ -45,7 +45,7 @@ class OptimizationParams:
     """Optimization configuration."""
 
     max_iterations: int = 30
-    convergence_tol: float = 1e-3
+    convergence_tol: float = 1e-4
     gradient_fd_step: float = 1e-5
 
 

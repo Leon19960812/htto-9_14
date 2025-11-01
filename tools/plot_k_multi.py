@@ -151,6 +151,8 @@ def main():
     labels = []
     positions = []
     width = 0.35
+    color_sdp = "#1F4C99"
+    color_scp = "#EFB600"
     for i in range(n):
         pos_center = i * 2.0
         # SDP (left), SCP (right)
@@ -159,7 +161,7 @@ def main():
         bp = ax.boxplot([sig_sdp, sig_scp], positions=[pos_center - width/2, pos_center + width/2],
                         widths=0.3, showfliers=False, patch_artist=True)
         # colors
-        for patch, clr in zip(bp['boxes'], ['#4c72b0', '#dd8452']):
+        for patch, clr in zip(bp['boxes'], [color_sdp, color_scp]):
             patch.set_facecolor(clr)
             patch.set_alpha(0.85)
         for med in bp['medians']:
@@ -174,7 +176,7 @@ def main():
     ax.grid(True, axis='y', alpha=0.3)
     # Legend proxy
     import matplotlib.patches as mpatches
-    ax.legend([mpatches.Patch(color='#4c72b0'), mpatches.Patch(color='#dd8452')], ['SDP', 'SCP'], loc='best')
+    ax.legend([mpatches.Patch(color=color_sdp), mpatches.Patch(color=color_scp)], ['SDP', 'SCP'], loc='best')
     fig.tight_layout()
     fig.savefig(outdir / 'utilization_boxplot_multi.png', dpi=300, bbox_inches='tight')
     plt.close(fig)

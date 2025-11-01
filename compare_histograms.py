@@ -4,8 +4,8 @@ from pathlib import Path
 
 plt.rcParams.update({'font.size': 14})
 
-SCP_DIR = Path("results_scp_8_k4")
-SDP_DIR = Path("results_sdp_8_k4")
+SCP_DIR = Path("results_scp_8_k3")
+SDP_DIR = Path("results_sdp_8_k3")
 OUTPUT_DIR = Path("results_compare_8/all")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
@@ -61,17 +61,20 @@ scp_counts, _ = np.histogram(scp_valid, bins=bin_edges)
 plt.figure(figsize=(9, 6))
 left_edges = bin_edges[:-1]
 
+color_sdp = "#566BF0"
+color_scp = "#EFB600"
+
 plt.bar(left_edges, sdp_counts, width=bar_width, align="edge",
-        color="steelblue", edgecolor="black", label="SDP")
+        color=color_sdp, edgecolor="black", label="SDP")
 plt.bar(left_edges + bar_width, scp_counts, width=bar_width, align="edge",
-        color="darkorange", edgecolor="black", label="SCP")
+        color=color_scp, edgecolor="black", label="SCP")
 
 # Plot removal thresholds (if distinct, both will appear)
 if abs(sdp_thr - scp_thr) < 1e-9:
-    plt.axvline(scp_thr * 1e6, color="red", linestyle="--", linewidth=1.2, label="Removal Threshold")
+    plt.axvline(scp_thr * 1e6, color="red", linestyle="--", linewidth=3, label="Removal Threshold")
 else:
-    plt.axvline(sdp_thr * 1e6, color="steelblue", linestyle="--", linewidth=1.2, label="SDP Threshold")
-    plt.axvline(scp_thr * 1e6, color="darkorange", linestyle="--", linewidth=1.2, label="SCP Threshold")
+    plt.axvline(sdp_thr * 1e6, color=color_sdp, linestyle="--", linewidth=1.2, label="SDP Threshold")
+    plt.axvline(scp_thr * 1e6, color=color_scp, linestyle="--", linewidth=1.2, label="SCP Threshold")
 
 plt.xlim(min_threshold_mm2, max_area)
 plt.xticks(np.linspace(min_threshold_mm2, max_area, 11))
@@ -81,7 +84,7 @@ plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 
-output_path = OUTPUT_DIR / "area_histogram_scp_vs_sdp_8k4.png"
+output_path = OUTPUT_DIR / "area_histogram_scp_vs_sdp_8k3.png"
 plt.savefig(output_path, dpi=300)
 print(f"Combined histogram saved to: {output_path}")
 plt.show()
