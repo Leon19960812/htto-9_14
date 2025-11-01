@@ -6,7 +6,7 @@ expected interfaces. Comments are in English; code is UTF-8 and ASCII-safe.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional
+from typing import List, Tuple, Optional
 
 import numpy as np
 
@@ -125,423 +125,15 @@ class ConvergenceChecker:
 
 
 class GradientCalculator:
-    """Analytical sensitivities for compliance gradients and θ-linearization."""
+    """Returns placeholder gradients for compatibility."""
 
     def __init__(self, optimizer_ref):
         self.opt = optimizer_ref
         self.fd_step = OptimizationParams().gradient_fd_step
 
-    # ------------------------------------------------------------------
-    # Public APIs
-    # ------------------------------------------------------------------
-    def compute_gradients(
-        self,
-        theta: np.ndarray,
-        areas: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Return gradients (∂C/∂θ, ∂C/∂A) at the current design point."""
-
-        theta_vec = np.asarray(theta, dtype=float)
-        areas_vec = self._ensure_area_vector(areas)
-
-        state = self._build_state(theta_vec, areas_vec)
-        grad_A = self._area_gradient(state)
-        grad_theta = self._theta_gradient(state)
-        return grad_theta, grad_A
-
-    def compute_theta_sensitivities(
-        self,
-        theta: np.ndarray,
-        areas: np.ndarray,
-        coords: np.ndarray,
-        lengths: np.ndarray,
-        directions: np.ndarray,
-        free_dofs: np.ndarray,
-        base_load: np.ndarray,
-        f_scale: float = 1.0,
-    ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-        """Return (∂K_ff/∂θ_j, ∂f_ff/∂θ_j) for subproblem linearization.
-
-        The stiffness derivatives match the normalized convention used by the
-        subproblem builder (E factored out). Load derivatives default to the
-        analytical hydrostatic model; when shell FEA supplies loads, we fall
-        back to a forward finite-difference evaluation because closed-form
-        sensitivities are unavailable.
-        """
-
-        theta_vec = np.asarray(theta, dtype=float)
-        areas_vec = np.asarray(areas, dtype=float)
-        free = np.asarray(free_dofs, dtype=int)
-
-        geometry = self.opt.geometry
-        n_dof = int(geometry.n_dof)
-        n_theta = int(theta_vec.size)
-        node_ids = self._theta_node_ids(n_theta)
-        index_map = {nid: idx for idx, nid in enumerate(node_ids)}
-
-        # Precompute element contributions once per evaluation
-        elements = geometry.elements
-        Ktheta_list: List[np.ndarray] = []
-        ftheta_list: List[np.ndarray] = []
-
-        # Cache per-element kernels to avoid recomputing
-        unit_kernels = [self._unit_stiffness(dirs[0], dirs[1]) for dirs in directions]
-
-        enable_shell_fd = bool(getattr(self.opt, "enable_shell_fd_sensitivity", False))
-
-        for j, node_id in enumerate(node_ids):
-            dK_global = np.zeros((n_dof, n_dof), dtype=float)
-
-            for idx, (n1, n2) in enumerate(elements):
-                role = self._theta_role(node_id, n1, n2)
-                if role is None:
-                    continue
-
-                L = float(max(lengths[idx], 1e-12))
-                deriv = self._stiffness_theta_derivative(
-                    coords[n1],
-                    coords[n2],
-                    lengths[idx],
-                    directions[idx],
-                    unit_kernels[idx],
-                    role,
-                )
-                if deriv is None:
-                    continue
-
-                factor = float(areas_vec[idx])
-                local = factor * deriv  # modulus E kept factored out
-                dofs = [2 * n1, 2 * n1 + 1, 2 * n2, 2 * n2 + 1]
-                for r in range(4):
-                    for cidx in range(4):
-                        dK_global[dofs[r], dofs[cidx]] += local[r, cidx]
-
-            dK_ff = dK_global[np.ix_(free, free)]
-            Ktheta_list.append(dK_ff)
-
-            df_global = self._load_theta_derivative(
-                node_id,
-                coords,
-                base_load,
-                theta_vec,
-                index_map,
-                use_shell_fd=(enable_shell_fd and not bool(getattr(self.opt.load_calc, "simple_mode", False))),
-            )
-            df_ff = df_global[free] * float(f_scale)
-            ftheta_list.append(df_ff)
-
-        return Ktheta_list, ftheta_list
-
-    # ------------------------------------------------------------------
-    # Gradient helpers
-    # ------------------------------------------------------------------
-    def _build_state(self, theta: np.ndarray, areas: np.ndarray):
-        opt = self.opt
-        coords = opt._update_node_coordinates(theta)
-        lengths, directions = opt.geometry_calc.compute_element_geometry(
-            coords, opt.geometry.elements
-        )
-
-        K_full = opt.stiffness_calc.assemble_global_stiffness(
-            opt.geometry, areas, lengths, directions
-        )
-
-        load_vector = opt._compute_load_vector(coords)
-        free = np.asarray(opt.free_dofs, dtype=int)
-        K_ff = K_full[np.ix_(free, free)]
-        f_ff = load_vector[free]
-        u_full = np.zeros_like(load_vector, dtype=float)
-        u_ff = self._solve_reduced_system(K_ff, f_ff)
-        u_full[free] = u_ff
-
-        return {
-            "theta": theta,
-            "areas": areas,
-            "coords": coords,
-            "lengths": lengths,
-            "directions": directions,
-            "K_full": K_full,
-            "load": load_vector,
-            "u_full": u_full,
-        }
-
-    def _area_gradient(self, state: dict) -> np.ndarray:
-        areas = state["areas"]
-        coords = state["coords"]
-        lengths = state["lengths"]
-        directions = state["directions"]
-        u_full = state["u_full"]
-
-        grad = np.zeros_like(areas, dtype=float)
-        E = float(self.opt.material_data.E_steel)
-        elements = self.opt.geometry.elements
-
-        for idx, (n1, n2) in enumerate(elements):
-            dofs = [2 * n1, 2 * n1 + 1, 2 * n2, 2 * n2 + 1]
-            ue = u_full[dofs]
-            L = float(max(lengths[idx], 1e-12))
-            kernel = self._unit_stiffness(directions[idx][0], directions[idx][1])
-            grad[idx] = -E / L * float(ue @ (kernel @ ue))
-
-        return grad
-
-    def _theta_gradient(self, state: dict) -> np.ndarray:
-        theta = state["theta"]
-        coords = state["coords"]
-        lengths = state["lengths"]
-        directions = state["directions"]
-        load = state["load"]
-        u_full = state["u_full"]
-        areas = state["areas"]
-
-        geometry = self.opt.geometry
-        elements = geometry.elements
-        node_ids = self._theta_node_ids(len(theta))
-        index_map = {nid: idx for idx, nid in enumerate(node_ids)}
-
-        grad = np.zeros_like(theta, dtype=float)
-        E = float(self.opt.material_data.E_steel)
-
-        unit_kernels = [self._unit_stiffness(d[0], d[1]) for d in directions]
-
-        enable_shell_fd = bool(getattr(self.opt, "enable_shell_fd_sensitivity", False))
-
-        for j, node_id in enumerate(node_ids):
-            acc = 0.0
-            for idx, (n1, n2) in enumerate(elements):
-                role = self._theta_role(node_id, n1, n2)
-                if role is None:
-                    continue
-
-                deriv = self._stiffness_theta_derivative(
-                    coords[n1],
-                    coords[n2],
-                    lengths[idx],
-                    directions[idx],
-                    unit_kernels[idx],
-                    role,
-                )
-                if deriv is None:
-                    continue
-
-                dofs = [2 * n1, 2 * n1 + 1, 2 * n2, 2 * n2 + 1]
-                ue = u_full[dofs]
-                factor = E * float(areas[idx])
-                acc -= float(ue @ ((factor * deriv) @ ue))
-
-            df = self._load_theta_derivative(
-                node_id,
-                coords,
-                load,
-                theta,
-                index_map,
-                use_shell_fd=(enable_shell_fd and not bool(getattr(self.opt.load_calc, "simple_mode", False))),
-            )
-            grad[j] += float(df @ u_full)
-            grad[j] += acc
-
-        return grad
-
-    # ------------------------------------------------------------------
-    # Low-level utilities
-    # ------------------------------------------------------------------
-    def _ensure_area_vector(self, areas: Optional[np.ndarray]) -> np.ndarray:
-        if areas is not None:
-            return np.asarray(areas, dtype=float)
-        candidate = getattr(self.opt, "current_areas", None)
-        if candidate is None:
-            raise ValueError("Area vector is required for gradient evaluation")
-        return np.asarray(candidate, dtype=float)
-
-    def _theta_node_ids(self, n_theta: int) -> List[int]:
-        ids = getattr(self.opt, "theta_node_ids", []) or []
-        if len(ids) >= n_theta:
-            return [int(ids[i]) for i in range(n_theta)]
-        return list(range(n_theta))
-
-    @staticmethod
-    def _theta_role(node_id: int, n1: int, n2: int) -> Optional[str]:
-        if node_id == n1:
-            return "n1"
-        if node_id == n2:
-            return "n2"
-        return None
-
-    @staticmethod
-    def _unit_stiffness(c: float, s: float) -> np.ndarray:
-        return np.array(
-            [
-                [c * c, c * s, -c * c, -c * s],
-                [c * s, s * s, -c * s, -s * s],
-                [-c * c, -c * s, c * c, c * s],
-                [-c * s, -s * s, c * s, s * s],
-            ],
-            dtype=float,
-        )
-
-    @staticmethod
-    def _unit_stiffness_derivative(c: float, s: float, dc: float, ds: float) -> np.ndarray:
-        return np.array(
-            [
-                [2.0 * c * dc, c * ds + s * dc, -2.0 * c * dc, -(c * ds + s * dc)],
-                [c * ds + s * dc, 2.0 * s * ds, -(c * ds + s * dc), -2.0 * s * ds],
-                [-2.0 * c * dc, -(c * ds + s * dc), 2.0 * c * dc, c * ds + s * dc],
-                [-(c * ds + s * dc), -2.0 * s * ds, c * ds + s * dc, 2.0 * s * ds],
-            ],
-            dtype=float,
-        )
-
-    def _stiffness_theta_derivative(
-        self,
-        node1: np.ndarray,
-        node2: np.ndarray,
-        length: float,
-        direction: np.ndarray,
-        unit_kernel: np.ndarray,
-        role: str,
-    ) -> Optional[np.ndarray]:
-        L = float(max(length, 1e-12))
-        c = float(direction[0])
-        s = float(direction[1])
-
-        dx = c * L
-        dy = s * L
-
-        if role == "n1":
-            d_dx = float(node1[1])
-            d_dy = -float(node1[0])
-        elif role == "n2":
-            d_dx = -float(node2[1])
-            d_dy = float(node2[0])
-        else:
-            return None
-
-        dL = (dx * d_dx + dy * d_dy) / L
-        dc = (d_dx * L - dx * dL) / (L * L)
-        ds = (d_dy * L - dy * dL) / (L * L)
-        d_unit = self._unit_stiffness_derivative(c, s, dc, ds)
-        return (-dL / (L * L)) * unit_kernel + (1.0 / L) * d_unit
-
-    def _load_theta_derivative(
-        self,
-        node_id: int,
-        coords: np.ndarray,
-        base_load: np.ndarray,
-        theta_vec: np.ndarray,
-        index_map: Dict[int, int],
-        use_shell_fd: bool,
-    ) -> np.ndarray:
-        load_calc = getattr(self.opt, "load_calc", None)
-        geometry = getattr(self.opt, "geometry", None)
-        load_nodes = list(getattr(geometry, "load_nodes", []) or [])
-
-        # simple hydrostatic模式仍使用解析公式
-        if bool(getattr(load_calc, "simple_mode", False)):
-            return self._load_theta_derivative_simple(node_id, coords)
-
-        shell_mode = bool(getattr(load_calc, "enable_shell", False)) and not bool(getattr(load_calc, "simple_mode", False))
-
-        if shell_mode and load_calc is not None:
-            jac = load_calc.get_last_shell_load_jacobian()
-            if jac is None:
-                # 尝试强制刷新一次 Jacobian
-                self.opt._compute_load_vector(coords, return_jacobian=True)
-                jac = load_calc.get_last_shell_load_jacobian()
-
-            if jac is not None:
-                load_map = {int(nid): idx for idx, nid in enumerate(load_nodes)}
-                if node_id not in load_map:
-                    return np.zeros_like(base_load)
-
-                idx = load_map[node_id]
-                col_x = 2 * idx
-                col_y = col_x + 1
-                if col_y >= jac.shape[1]:
-                    return np.zeros_like(base_load)
-
-                x = float(coords[node_id, 0])
-                y = float(coords[node_id, 1])
-                df_dx = jac[:, col_x]
-                df_dy = jac[:, col_y]
-                df = (-y) * df_dx + (x) * df_dy
-                return np.asarray(df, dtype=float)
-
-        if not use_shell_fd:
-            return np.zeros_like(base_load)
-
-        # Fallback: forward finite difference using shell FEA loads
-        if node_id not in load_nodes:
-            return np.zeros_like(base_load)
-
-        idx = index_map.get(node_id)
-        if idx is None:
-            return np.zeros_like(base_load)
-
-        theta_fd = np.asarray(theta_vec, dtype=float)
-        theta_fd[idx] += float(self.fd_step)
-
-        coords_fd = self.opt._update_node_coordinates(theta_fd)
-        lc = getattr(self.opt, "load_calc", None)
-        history_snapshot = []
-        last_raw = None
-        current = None
-        if lc is not None:
-            history_snapshot = [h.copy() for h in getattr(lc, "_load_history", [])]
-            last_raw = None if getattr(lc, "_last_raw_load_vector", None) is None else lc._last_raw_load_vector.copy()
-            current = None if getattr(lc, "current_load_vector", None) is None else lc.current_load_vector.copy()
-
-        load_fd = self.opt._compute_load_vector(coords_fd)
-
-        # restore baseline geometry
-        self.opt._update_node_coordinates(theta_vec)
-
-        if lc is not None:
-            try:
-                lc._load_history = [h.copy() for h in history_snapshot]
-                lc._last_raw_load_vector = None if last_raw is None else last_raw.copy()
-                lc.current_load_vector = None if current is None else current.copy()
-            except Exception:
-                pass
-
-        return (np.asarray(load_fd, dtype=float) - np.asarray(base_load, dtype=float)) / float(self.fd_step)
-
-    def _load_theta_derivative_simple(self, node_id: int, coords: np.ndarray) -> np.ndarray:
-        load_nodes = getattr(self.opt.geometry, "load_nodes", []) or []
-        if node_id not in load_nodes:
-            return np.zeros(self.opt.geometry.n_dof, dtype=float)
-
-        rho_g = float(self.opt.material_data.rho_water * self.opt.material_data.g)
-        depth = float(getattr(self.opt, "depth", 0.0))
-
-        x, y = float(coords[node_id, 0]), float(coords[node_id, 1])
-        r = float(np.hypot(x, y))
-        if r <= 1e-12:
-            return np.zeros(self.opt.geometry.n_dof, dtype=float)
-
-        h = max(0.0, depth - y)
-        if h <= 0.0:
-            return np.zeros(self.opt.geometry.n_dof, dtype=float)
-
-        df = np.zeros(self.opt.geometry.n_dof, dtype=float)
-        df_x = rho_g * ((x * x) / r + h * y / r)
-        df_y = rho_g * ((x * y) / r - h * x / r)
-        df[2 * node_id] = df_x
-        df[2 * node_id + 1] = df_y
-        return df
-
-    @staticmethod
-    def _solve_reduced_system(K_ff: np.ndarray, f_ff: np.ndarray) -> np.ndarray:
-        try:
-            return np.linalg.solve(K_ff, f_ff)
-        except np.linalg.LinAlgError:
-            lam = 1e-8 * float(np.maximum(1e-16, np.mean(np.diag(K_ff)) if K_ff.size else 1.0))
-            K = K_ff.astype(float)
-            for _ in range(5):
-                try:
-                    return np.linalg.solve(K + lam * np.eye(K.shape[0]), f_ff)
-                except np.linalg.LinAlgError:
-                    lam *= 10.0
-            return np.linalg.pinv(K_ff, rcond=1e-10) @ f_ff
+    def compute_gradients(self, theta: np.ndarray) -> Tuple[List, List]:
+        # Minimal placeholder: return empty lists to satisfy type checks.
+        return [], []
 
 
 # ==========================
@@ -555,25 +147,11 @@ class SystemCalculator:
     def __init__(self, optimizer_ref):
         self.opt = optimizer_ref
 
-    def compute_actual_compliance(
-        self,
-        theta: np.ndarray,
-        A: np.ndarray,
-        load_override: Optional[np.ndarray] = None,
-        update_frozen: bool = True,
-    ) -> float:
+    def compute_actual_compliance(self, theta: np.ndarray, A: np.ndarray) -> float:
         """Compute compliance = f_red^T * u_red using current geometry and areas.
 
-        Parameters
-        ----------
-        theta, A
-            Candidate design variables.
-        load_override
-            Optional load vector to use directly. When provided, the load is
-            assumed to already live on the full DOF space.
-        update_frozen
-            If ``True`` (default) the load used for the solve is cached as the
-            new frozen load for subsequent evaluations.
+        Coordinates are obtained via the optimizer adapter to allow a future
+        switch to PolarGeometry without changing this call-site.
         """
         # Update coordinates from theta using optimizer adapter
         coords = self.opt._update_node_coordinates(theta)
@@ -581,48 +159,35 @@ class SystemCalculator:
         lengths, directions = self.opt.geometry_calc.compute_element_geometry(
             coords, self.opt.geometry.elements
         )
-        # Global stiffness
+        # Global stiffness and load
         K = self.opt.stiffness_calc.assemble_global_stiffness(
             self.opt.geometry, A, lengths, directions
         )
-
+        # Decide whether to reuse frozen load vector
+        use_frozen = bool(getattr(self.opt, '_use_frozen_load', False))
+        frozen_vec = getattr(self.opt, 'frozen_load_vector', None)
         f = None
-        if load_override is not None:
+        if use_frozen and frozen_vec is not None:
             try:
-                f = np.asarray(load_override, dtype=float)
-            except Exception as exc:
-                raise ValueError('Failed to convert load_override to ndarray') from exc
-        else:
-            # Decide whether to reuse frozen load vector
-            use_frozen = bool(getattr(self.opt, '_use_frozen_load', False))
-            frozen_vec = getattr(self.opt, 'frozen_load_vector', None)
-            if use_frozen and frozen_vec is not None:
-                try:
-                    f = np.asarray(frozen_vec, dtype=float)
-                    if f.size != self.opt.geometry.n_dof:
-                        f = None  # fallback to recompute if dimension mismatch
-                    else:
-                        f = f.copy()
-                except Exception:
-                    f = None
-
-            if f is None:
-                load_nodes = getattr(self.opt.geometry, 'load_nodes', [])
-                f = self.opt.load_calc.compute_load_vector(coords, load_nodes, self.opt.depth)
-                f = np.asarray(f, dtype=float)
+                f = np.asarray(frozen_vec, dtype=float)
+                if f.size != self.opt.geometry.n_dof:
+                    f = None  # fallback to recompute if dimension mismatch
+                else:
+                    f = f.copy()
+            except Exception:
+                f = None
 
         if f is None:
-            raise ValueError('Load vector could not be constructed for compliance evaluation')
-
-        if f.size != self.opt.geometry.n_dof:
-            raise ValueError(f"Load vector size mismatch: expected {self.opt.geometry.n_dof}, got {f.size}")
-
-        if update_frozen:
+            load_nodes = getattr(self.opt.geometry, 'load_nodes', [])
+            f = self.opt.load_calc.compute_load_vector(coords, load_nodes, self.opt.depth)
+            f = np.asarray(f, dtype=float)
             try:
                 self.opt.frozen_load_vector = f.copy()
             except Exception:
                 pass
 
+        if f.size != self.opt.geometry.n_dof:
+            raise ValueError(f"Load vector size mismatch: expected {self.opt.geometry.n_dof}, got {f.size}")
         # Reduce by free DOFs
         Kff = K[np.ix_(self.opt.free_dofs, self.opt.free_dofs)]
         ff = f[self.opt.free_dofs]
@@ -661,104 +226,26 @@ class StepQualityEvaluator:
         predicted_from_model: Optional[float] = None,
     ) -> float:
         current = float(self.opt.current_compliance)
-
-        cfg = getattr(self.opt, 'load_continuation_config', None) or {}
-        steps = max(1, int(cfg.get('steps', 4)))
-        alpha_cap = float(cfg.get('alpha_max', 0.9))
-        gamma = float(cfg.get('gamma', 0.7))
-        stop_tol = float(cfg.get('stopping_tol', 1e-3))
-
-        load_nodes = getattr(self.opt.geometry, 'load_nodes', [])
-        coords_new = self.opt._update_node_coordinates(theta_new)
-        load_new = np.asarray(
-            self.opt.load_calc.compute_load_vector(coords_new, load_nodes, self.opt.depth),
-            dtype=float,
-        )
-
-        frozen_old = getattr(self.opt, 'frozen_load_vector', None)
-        if frozen_old is None:
-            coords_old = self.opt._update_node_coordinates(theta_old)
-            frozen_old = self.opt.load_calc.compute_load_vector(coords_old, load_nodes, self.opt.depth)
-        load_old = np.asarray(frozen_old, dtype=float)
-
-        size_mismatch = load_old.size != load_new.size
-        if size_mismatch:
-            steps = 1
-
-        blended = load_new.copy() if size_mismatch else load_old.copy()
-        actual = None
-        prev_comp = None
-        used_steps = 0
-
-        for j in range(steps):
-            if steps == 1:
-                alpha = 1.0
-            else:
-                convex = 1.0 - (1.0 - alpha_cap) * (gamma ** (j + 1))
-                linear = (j + 1) / steps
-                alpha = max(0.0, min(1.0, max(convex, linear)))
-                if j == steps - 1:
-                    alpha = 1.0
-            blended = (1.0 - alpha) * blended + alpha * load_new
-            actual = float(
-                self.opt.system_calculator.compute_actual_compliance(
-                    theta_new, A_new, load_override=blended, update_frozen=False
-                )
-            )
-            used_steps += 1
-
-            if prev_comp is not None:
-                denom = max(abs(prev_comp), 1.0)
-                if abs(actual - prev_comp) / denom < stop_tol:
-                    break
-            prev_comp = actual
-
-        if actual is None:
-            blended = load_new.copy()
-            actual = float(
-                self.opt.system_calculator.compute_actual_compliance(
-                    theta_new, A_new, load_override=blended, update_frozen=False
-                )
-            )
-            used_steps = 1
-
+        use_frozen_prev = getattr(self.opt, '_use_frozen_load', False)
+        try:
+            self.opt._use_frozen_load = True
+            actual = float(self.opt.system_calculator.compute_actual_compliance(theta_new, A_new))
+        finally:
+            self.opt._use_frozen_load = use_frozen_prev
         if predicted_from_model is None:
+            # Minimal fallback: use actual as predicted to avoid division issues.
             predicted = actual
         else:
             predicted = float(predicted_from_model)
-
-        print(
-            f"[StepQuality] actual_compliance={actual:.6e} predicted_compliance={predicted:.6e}"
-        )
+        print(f"[StepQuality] actual_compliance={actual:.6e} predicted_compliance={predicted:.6e}")
         if not (np.isfinite(actual) and np.isfinite(predicted)):
-            print(
-                f"[StepQuality] non-finite compliance detected: actual={actual}, predicted={predicted}"
-            )
-
-        pending = {
-            'theta': np.asarray(theta_new, dtype=float).copy(),
-            'A': np.asarray(A_new, dtype=float).copy(),
-            'actual': float(actual),
-            'predicted': float(predicted),
-            'blended_load': blended.copy(),
-            'continuation_steps': used_steps,
-        }
-        try:
-            self.opt._pending_quality = pending
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self.opt, 'step_details') and self.opt.step_details:
-                self.opt.step_details[-1]['actual_compliance'] = float(actual)
-                self.opt.step_details[-1]['predicted_compliance'] = float(predicted)
-                self.opt.step_details[-1]['continuation_steps'] = used_steps
-        except Exception:
-            pass
+            print(f"[StepQuality] non-finite compliance detected: actual={actual}, predicted={predicted}")
 
         actual_reduction = current - actual
         predicted_reduction = current - predicted
 
+        # Guard: if模型预测本身就是“变差”（或无法给出下降），直接判定为劣质步长
+        # 返回 -inf 让信赖域机制拒绝该步
         if predicted_reduction <= 0.0 or not np.isfinite(predicted_reduction):
             print(f"[StepQuality] invalid predicted reduction: {predicted_reduction}")
             return float('-inf')
@@ -766,9 +253,6 @@ class StepQualityEvaluator:
         if abs(predicted_reduction) < 1e-16:
             return 1.0 if actual_reduction >= 0.0 else -1.0
         return float(actual_reduction / predicted_reduction)
-
-
-
 
 
 # ==========================
@@ -863,13 +347,6 @@ class SubproblemSolver:
         # Precompute geometry at theta_k
         coords_k = self.opt._update_node_coordinates(theta_k)
         elen_k, edir_k = self.opt._compute_element_geometry(coords_k)
-        try:
-            self.opt.element_lengths = np.asarray(elen_k, dtype=float).copy()
-            init = getattr(self.opt, 'initializer', None)
-            if init is not None:
-                setattr(init, 'element_lengths', self.opt.element_lengths.copy())
-        except Exception:
-            pass
         E = float(getattr(self.opt.material_data, 'E_steel', 1.0))
         # Scale loads to improve conditioning when K uses 1/L kernels
         import numpy as _np
@@ -917,23 +394,49 @@ class SubproblemSolver:
             pass
 
         # f at theta_k on free DOFs
-        need_shell_jac = bool(
-            getattr(self.opt.load_calc, "enable_shell", False)
-            and not bool(getattr(self.opt.load_calc, "simple_mode", False))
-        )
-        f_full_k = self.opt._compute_load_vector(coords_k, return_jacobian=need_shell_jac)
+        f_full_k = self.opt._compute_load_vector(coords_k)
         fff_k = f_full_k[free] * f_scale
 
-        Ktheta_ff, ftheta_ff = self.gradient_calc.compute_theta_sensitivities(
-            theta_k,
-            A_k,
-            coords_k,
-            elen_k,
-            edir_k,
-            free,
-            f_full_k,
-            f_scale=f_scale,
-        )
+        # Finite-difference gradients w.r.t theta (for K and f)
+        fd_h = float(getattr(self.opt.optimization_params, 'gradient_fd_step', 1e-6))
+        Ktheta_ff = []  # list of (n_free,n_free)
+        ftheta_ff = []  # list of (n_free,)
+        if n > 0:
+            for j in range(n):
+                e = np.zeros(n, dtype=float); e[j] = fd_h
+                coords_j = self.opt._update_node_coordinates(theta_k + e)
+                elen_j, edir_j = self.opt._compute_element_geometry(coords_j)
+                # Rebuild Kff for A_k at perturbed theta
+                Kff_j = np.zeros((n_free, n_free), dtype=float)
+                for i, (n1, n2) in enumerate(self.opt.geometry.elements):
+                    L = float(max(elen_j[i], 1e-12))
+                    c, s = float(edir_j[i][0]), float(edir_j[i][1])
+                    k_coeff = 1.0 / L
+                    k_local = k_coeff * np.array([
+                        [c*c, c*s, -c*c, -c*s],
+                        [c*s, s*s, -c*s, -s*s],
+                        [-c*c, -c*s, c*c, c*s],
+                        [-c*s, -s*s, c*s, s*s],
+                    ], dtype=float)
+                    K_full = np.zeros((n_dof, n_dof), dtype=float)
+                    dofs = [2*n1, 2*n1+1, 2*n2, 2*n2+1]
+                    for r in range(4):
+                        for cidx in range(4):
+                            K_full[dofs[r], dofs[cidx]] += k_local[r, cidx] * float(A_k[i])
+                    # project and accumulate
+                    Kff_j += K_full[np.ix_(free, free)]
+                Ktheta_ff.append((Kff_j - Kff_k) / fd_h)
+
+                # f gradient
+                f_full_j = self.opt._compute_load_vector(coords_j)
+                ftheta_ff.append(((f_full_j[free] * f_scale) - fff_k) / fd_h)
+
+                # Restore baseline geometry before next perturbation to avoid drift
+                if j < n - 1:
+                    self.opt._update_node_coordinates(theta_k)
+
+            # Ensure geometry is reset to baseline after all perturbations
+            self.opt._update_node_coordinates(theta_k)
 
         # Further diagnostics: J_f/J_o split and gamma estimate
         try:
@@ -1151,3 +654,4 @@ class SubproblemSolver:
             if theta[i] < min_allowed:
                 theta[i] = min_allowed
         return theta
+

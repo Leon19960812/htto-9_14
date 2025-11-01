@@ -9,6 +9,7 @@ ground structure generation. Comments are in English; UTF-8 + LF.
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 import numpy as np
+import math
 
 
 # ==========================
@@ -232,7 +233,11 @@ class ConstraintCalculator:
 class TrussSystemInitializer:
     """Unified initializer using PolarGeometry and clean helpers."""
 
-    def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2, E_steel=210e9, enable_middle_layer=False, middle_layer_ratio=0.85, use_polar: bool = True, polar_config: dict = None, simple_loads: bool = False):
+    def __init__(self, radius=2.0, n_sectors=12, inner_ratio=0.7, depth=50, volume_fraction=0.2,
+                 E_steel=210e9, E_shell=210e9,
+                 enable_middle_layer=False, middle_layer_ratio=0.85,
+                 k_theta_steps: int = 2,
+                 use_polar: bool = True, polar_config: dict = None, simple_loads: bool = False):
         # Store basic parameters
         self.radius = float(radius)
         self.n_sectors = int(n_sectors)
@@ -241,6 +246,7 @@ class TrussSystemInitializer:
         self.volume_fraction = float(volume_fraction)
         self.enable_middle_layer = bool(enable_middle_layer)
         self.middle_layer_ratio = float(middle_layer_ratio)
+        self.k_theta_steps = int(k_theta_steps)
 
         # Material
         self.material_data = MaterialData(
@@ -253,23 +259,31 @@ class TrussSystemInitializer:
             removal_threshold=1e-4,
         )
 
+        if E_shell is None:
+            E_shell = float(E_steel)
+        self.E_shell = float(E_shell)
+
         # Calculators
         self.geometry_calc = GeometryCalculator()
         try:
             from .load_calculator_with_shell import LoadCalculatorWithShell
-            shell_params = {
-                "outer_radius": self.radius,
-                "depth": self.depth,
-                "thickness": 0.01,
-                "n_circumferential": max(8, self.n_sectors + 1),
-                "n_radial": 2,
-                "E_shell": float(self.material_data.E_steel),
-            }
             self.use_simple_loads = bool(simple_loads)
+            thickness = 0.15
+            self.shell_params = {
+                # Set shell outer radius so that inner wall (outer_radius - thickness) matches truss outer ring radius
+                "outer_radius": float(self.radius + thickness),
+                "depth": self.depth,
+                "thickness": thickness,
+                # "n_circumferential": int(math.ceil(3 * (self.n_sectors + 1))),
+                "n_circumferential": 150,
+                "n_radial": 3,
+                "E_shell": self.E_shell,
+            }
+            shell_cfg = dict(self.shell_params)
             self.load_calc = LoadCalculatorWithShell(
                 self.material_data,
                 enable_shell=(not self.use_simple_loads),
-                shell_params=shell_params,
+                shell_params=shell_cfg,
                 simple_mode=self.use_simple_loads,
             )
         except Exception as e:
@@ -287,7 +301,7 @@ class TrussSystemInitializer:
             {"radius": self.radius, "n_nodes": self.n_sectors + 1, "type": "outer"},
             {"radius": self.radius * self.inner_ratio, "n_nodes": self.n_sectors + 1, "type": "inner"},
         ]
-        pg = _PolarGeometry(_PolarConfig(rings=rings))
+        pg = _PolarGeometry(_PolarConfig(rings=rings, k_theta_steps=self.k_theta_steps))
         # Expose PolarGeometry instance for downstream optimizer usage
         self.polar_geometry = pg
 
@@ -439,7 +453,7 @@ class TrussSystemInitializer:
     ) -> List[List[int]]:
         from .node_merger import NodeMerger
 
-        merger = NodeMerger(self.geometry, self.constraint_calc, merge_threshold)
+        merger = NodeMerger(self.geometry, self.constraint_calc, merge_threshold, a_max=getattr(self, 'A_max', None))
         groups = merger.find_merge_groups(
             theta_ids=theta_ids,
             merge_threshold=merge_threshold,
@@ -460,7 +474,7 @@ class TrussSystemInitializer:
         from .node_merger import NodeMerger, MERGE_THRESHOLD_DEFAULT
 
         threshold = MERGE_THRESHOLD_DEFAULT if merge_threshold is None else float(merge_threshold)
-        merger = NodeMerger(self.geometry, self.constraint_calc, threshold)
+        merger = NodeMerger(self.geometry, self.constraint_calc, threshold, a_max=getattr(self, 'A_max', None))
         result = merger.merge_node_groups(theta, theta_ids, A, merge_groups)
 
         if result.structure_modified:

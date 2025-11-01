@@ -56,6 +56,7 @@ class PolarConfig:
     rings: List[dict]           # 环形配置：[{'radius': float, 'n_nodes': int, 'type': str}]
     support_nodes: List[int] = None       # 支撑节点ID列表
     load_nodes: List[int] = None          # 载荷节点ID列表
+    k_theta_steps: int = 2                # 角向连接窗口倍数（K_THETA_STEPS）
     
     def __post_init__(self):
         if self.support_nodes is None:
@@ -154,7 +155,15 @@ class PolarGeometry:
         diffs = np.diff(thetas)
         valid_diffs = diffs[diffs > 1e-12]
         avg_step = float(np.median(valid_diffs)) if valid_diffs.size else (np.pi / max(n_total - 1, 1))
-        K_THETA_STEPS = 2
+        try:
+            K_THETA_STEPS = int(getattr(self.config, 'k_theta_steps', 2))
+        except Exception:
+            K_THETA_STEPS = 2
+        # 可视诊断：报告角向窗口倍数
+        try:
+            print(f"  K_theta_steps = {K_THETA_STEPS}")
+        except Exception:
+            pass
         ANG_TOL = 1e-12
         EPS_RADIAL = 0.5 * avg_step  # 判定“近似径向”的角容差
 

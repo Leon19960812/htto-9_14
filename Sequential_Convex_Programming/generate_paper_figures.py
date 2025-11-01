@@ -53,7 +53,11 @@ def main():
     # Cleaned structure (areas below removal threshold suppressed)
     # Work around visualization's reliance on final_angles by providing coords directly
     try:
-        theta_use = getattr(opt, 'final_angles', None) or getattr(opt, 'current_angles', None)
+        theta_final = getattr(opt, 'final_angles', None)
+        if theta_final is not None:
+            theta_use = theta_final
+        else:
+            theta_use = getattr(opt, 'current_angles', None)
         coords_opt = opt._update_node_coordinates(theta_use)
         cleaned = opt.current_areas.copy()
         cleaned[cleaned < opt.removal_threshold] = 0

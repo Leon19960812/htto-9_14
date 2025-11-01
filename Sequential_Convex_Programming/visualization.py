@@ -12,6 +12,32 @@ class TrussVisualization:
     def __init__(self):
         pass
 
+    def _resolve_a_max_mm2(self, optimizer) -> float:
+        """Return declared maximum area in mm^2, fallback to 10,000."""
+        def _extract(data, key):
+            if data is None:
+                return None
+            if isinstance(data, dict):
+                return data.get(key)
+            return getattr(data, key, None)
+
+        candidates = (
+            _extract(optimizer, 'A_max'),
+            _extract(_extract(optimizer, 'material_data'), 'A_max'),
+            _extract(_extract(optimizer, 'constraint_data'), 'A_max'),
+            _extract(_extract(_extract(optimizer, 'geometry'), 'material_data'), 'A_max'),
+        )
+        for cand in candidates:
+            if cand is None:
+                continue
+            try:
+                val = float(cand)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(val) and val > 0:
+                return float(val) * 1e6
+        return 1e4
+
     def _get_support_nodes(self, optimizer):
         """Detect fixed supports as arc endpoints per ring.
 
@@ -213,13 +239,18 @@ class TrussVisualization:
             valid_areas = areas_mm2[areas_mm2 > optimizer.removal_threshold * 1e6]
             
             if len(valid_areas) > 0:
-                ax5.hist(valid_areas, bins=min(25, len(valid_areas)), alpha=0.7, 
-                        color='skyblue', edgecolor='black')
-                ax5.axvline(x=optimizer.removal_threshold*1e6, color='red', linestyle='--', 
-                           label=f'Removal Threshold')
-                ax5.set_xlabel('Cross-sectional Area (mm²)')
-                ax5.set_ylabel('Number of Members')
+                num_bins = max(1, min(25, len(valid_areas)))
+                ax5.hist(valid_areas, bins=num_bins, alpha=0.7,
+                         color='skyblue', edgecolor='black')
+                ax5.axvline(x=optimizer.removal_threshold*1e6, color='red', linestyle='--',
+                           label='Removal Threshold')
+                a_max_mm2 = max(self._resolve_a_max_mm2(optimizer), float(np.max(valid_areas)))
+                ax5.set_xlim(0, a_max_mm2)
+                ax5.set_xticks(np.linspace(0, a_max_mm2, 11))
+                ax5.set_xlabel('Cross-sectional Area (mm²)', fontsize=14)
+                ax5.set_ylabel('Number of Members', fontsize=14)
                 ax5.set_title('Area Distribution')
+                ax5.tick_params(axis='both', labelsize=14)
                 ax5.legend()
                 ax5.grid(True, alpha=0.3)
             else:
@@ -364,7 +395,9 @@ Verification:
         
         print("=" * 60)
     
-    def _plot_structure(self, optimizer, ax, areas, title, linewidth_mode='variable', node_coords=None, min_area_to_draw=None):
+    def _plot_structure(self, optimizer, ax, areas, title, linewidth_mode='variable', node_coords=None,
+                        min_area_to_draw=None, hide_isolated_nodes: bool = False, axial_forces=None,
+                        fill_nodes: bool = True, style: str = "default"):
         """绘制结构"""
         if node_coords is None:
             node_coords = np.array(optimizer.nodes)
@@ -389,37 +422,62 @@ Verification:
         
         # 绘制单元（支持可选的最小绘制面积覆盖阈值）
         thr = optimizer.removal_threshold if (min_area_to_draw is None) else float(min_area_to_draw)
+        # 统计活跃节点（至少连接一条被绘制的单元）
+        n_nodes_total = node_coords.shape[0]
+        active_node_mask = np.zeros(n_nodes_total, dtype=bool)
         for i, ((node1, node2), area) in enumerate(zip(optimizer.elements, areas)):
             if area > thr:
                 x1, y1 = node_coords[node1]
                 x2, y2 = node_coords[node2]
+                active_node_mask[int(node1)] = True
+                active_node_mask[int(node2)] = True
                 
                 area_ratio = area / optimizer.A_max
-                alpha = 1
+                if style == "ground_outline":
+                    line_color = "#444444"
+                    alpha = 0.6
+                else:
+                    line_color = 'darkblue'
+                    alpha = 1
                 
                 # 根据模式设置线宽
                 if linewidth_mode == 'uniform':
                     linewidth = 1
-                    color = 'black'
+                    color = line_color if style == "ground_outline" else 'black'
                 elif linewidth_mode == 'fine':
-                    linewidth = 0.8 + 2.0 * area_ratio
-                    color = 'darkblue'
+                    linewidth = 0.5 + 2.0 * area_ratio
+                    color = line_color
                 else:  # 'variable'
                     linewidth = 0.5 + 2.0 * area_ratio
-                    color = 'darkblue'
-                
-                ax.plot([x1, x2], [y1, y2], color=color, 
+                    color = line_color
+
+                # 如果提供了轴力，按受压/受拉着色（受压=红，受拉=蓝，近零=灰）
+                ax.plot([x1, x2], [y1, y2], color=color,
                     linewidth=linewidth, alpha=alpha)
         
         # 绘制节点（保持原有配色和逻辑）
         nodes_array = node_coords
+        fill_nodes_local = fill_nodes
+        if style == "ground_outline":
+            fill_nodes_local = False
         
         # 外层节点（荷载点）
         load_nodes = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
-        outer_coords = nodes_array[load_nodes]
-        ax.scatter(outer_coords[:, 0], outer_coords[:, 1], 
-                c='red', s=60, marker='o', edgecolors='black', 
-                label='Load Points', zorder=5)
+        if hide_isolated_nodes:
+            load_nodes = [n for n in load_nodes if active_node_mask[int(n)]]
+        outer_coords = nodes_array[load_nodes] if len(load_nodes) else np.empty((0, 2))
+        if outer_coords.size:
+            load_kwargs = dict(zorder=5)
+            if style == "ground_outline":
+                load_kwargs.update(s=120, marker='o', facecolors='none',
+                                   edgecolors='black', linewidths=2.0, label='Load Points')
+            else:
+                load_kwargs.update(s=60, marker='o', label='Load Points')
+                if fill_nodes_local:
+                    load_kwargs.update(c='red', edgecolors='black')
+                else:
+                    load_kwargs.update(facecolors='none', edgecolors='red', linewidths=1.5)
+            ax.scatter(outer_coords[:, 0], outer_coords[:, 1], **load_kwargs)
         
         # 支撑节点（内层两端固定，如果有中间层则中间层两端也固定）
         support_nodes = self._get_support_nodes(optimizer)
@@ -431,26 +489,51 @@ Verification:
             mask_other[np.asarray(load_nodes, dtype=int)] = False
             if support_nodes:
                 mask_other[np.asarray(support_nodes, dtype=int)] = False
+            if hide_isolated_nodes:
+                # 仅保留与活跃单元相连的“其他节点”
+                mask_other = mask_other & active_node_mask
             other_coords = nodes_array[mask_other]
             if other_coords.size:
-                ax.scatter(other_coords[:, 0], other_coords[:, 1],
-                           c='green', s=30, marker='o', edgecolors='black', alpha=0.8,
-                           label='Other Nodes', zorder=4)
+                other_kwargs = dict(marker='o', alpha=0.8,
+                                    label='Other Nodes', zorder=4)
+                if style == "ground_outline":
+                    other_kwargs.update(s=80, facecolors='none', edgecolors='black', linewidths=2.0)
+                else:
+                    other_kwargs.update(s=30)
+                    if fill_nodes_local:
+                        other_kwargs.update(c='green', edgecolors='black')
+                    else:
+                        other_kwargs.update(facecolors='none', edgecolors='black', linewidths=1.2)
+                ax.scatter(other_coords[:, 0], other_coords[:, 1], **other_kwargs)
         except Exception:
             pass
 
         # 绘制支撑节点
-        support_coords = nodes_array[support_nodes]
-        ax.scatter(support_coords[:, 0], support_coords[:, 1], 
-                c='blue', s=80, marker='^', edgecolors='black', 
-                label='Fixed Supports', zorder=6)
+        if hide_isolated_nodes:
+            support_nodes = [n for n in support_nodes if active_node_mask[int(n)]]
+        support_coords = nodes_array[support_nodes] if len(support_nodes) else np.empty((0, 2))
+        if support_coords.size:
+            support_kwargs = dict(marker='^', label='Fixed Supports', zorder=6)
+            if style == "ground_outline":
+                support_kwargs.update(s=140, facecolors='none', edgecolors='black', linewidths=2.5)
+            else:
+                support_kwargs.update(s=80)
+                if fill_nodes_local:
+                    support_kwargs.update(c='blue', edgecolors='black')
+                else:
+                    support_kwargs.update(facecolors='none', edgecolors='blue', linewidths=1.5)
+            ax.scatter(support_coords[:, 0], support_coords[:, 1], **support_kwargs)
         
         ax.set_xlim(-1.2 * optimizer.radius, 1.2 * optimizer.radius)
         ax.set_ylim(-0.2 * optimizer.radius, 1.2 * optimizer.radius)
         ax.set_aspect('equal')
-        ax.grid(True, alpha=0.3)
+        # ax.grid(True, alpha=0.3)
+        ax.grid(False)
+        ax.axis('off')
+        
         ax.legend()
-        ax.set_title(title, fontweight='bold')
+        if title:
+            ax.set_title(title, fontweight='bold')
     
     def _plot_loads(self, optimizer, ax):
         """绘制荷载分布"""
@@ -467,9 +550,10 @@ Verification:
             # 退化处理：若计算失败，回退到已存储的向量（可能不完全一致，但可避免崩溃）
             current_load_vector = optimizer.load_vector
         
-        # 绘制径向荷载
-        max_load = np.max(np.sqrt(current_load_vector[::2]**2 + current_load_vector[1::2]**2))
-        
+        # 绘制荷载箭头（根据实际矢量方向，不再假设纯径向）
+        load_norms = np.sqrt(current_load_vector[::2]**2 + current_load_vector[1::2]**2)
+        max_load = float(np.max(load_norms)) if load_norms.size else 0.0
+
         load_nodes = getattr(getattr(optimizer, 'geometry', optimizer), 'load_nodes', getattr(optimizer, 'outer_nodes', []))
         for i, node_idx in enumerate(load_nodes):
             x, y = nodes_array[node_idx]
@@ -478,12 +562,20 @@ Verification:
             
             if abs(load_x) > 1e-6 or abs(load_y) > 1e-6:
                 load_magnitude = np.sqrt(load_x**2 + load_y**2)
-                arrow_scale = load_magnitude / max_load * 0.3
-                
-                ax.arrow(x, y, load_x/load_magnitude * arrow_scale, 
-                        load_y/load_magnitude * arrow_scale,
-                        head_width=0.05, head_length=0.05, 
-                        fc='red', ec='red', alpha=0.8)
+                if max_load <= 0.0:
+                    continue
+                arrow_len = (load_magnitude / max_load) * 0.3
+                dx = (load_x / load_magnitude) * arrow_len
+                dy = (load_y / load_magnitude) * arrow_len
+                head_width = max(0.01, min(0.05, arrow_len * 0.4))
+                head_length = max(0.01, min(0.06, arrow_len * 0.6))
+
+                ax.arrow(
+                    x, y, dx, dy,
+                    head_width=head_width,
+                    head_length=head_length,
+                    fc='red', ec='red', alpha=0.8, length_includes_head=True
+                )
         
         # 绘制结构轮廓
         for i, ((node1, node2), area) in enumerate(zip(optimizer.elements, optimizer.final_areas)):
@@ -660,13 +752,19 @@ Verification:
         valid_areas = areas_mm2[areas_mm2 > optimizer.removal_threshold * 1e6]
         
         if len(valid_areas) > 0:
-            ax.hist(valid_areas, bins=min(25, len(valid_areas)), alpha=0.7, 
+            num_bins = max(1, min(25, len(valid_areas)))
+            ax.hist(valid_areas, bins=num_bins, alpha=0.7,
                     color='skyblue', edgecolor='black')
-            ax.axvline(x=optimizer.removal_threshold*1e6, color='red', linestyle='--', 
-                       label=f'Removal Threshold')
-            ax.set_xlabel('Cross-sectional Area (mm²)',fontsize=12)
-            ax.set_ylabel('Number of Members',fontsize=12)
+            ax.axvline(x=optimizer.removal_threshold*1e6, color='red', linestyle='--',
+                       label='Removal Threshold')
+            a_max_mm2 = max(self._resolve_a_max_mm2(optimizer), float(np.max(valid_areas)))
+            ax.set_xlim(0, a_max_mm2)
+            tick_count = 10
+            ax.set_xticks(np.linspace(0, a_max_mm2, tick_count + 1))
+            ax.set_xlabel('Cross-sectional Area (mm²)', fontsize=14)
+            ax.set_ylabel('Number of Members', fontsize=14)
             ax.set_title('')
+            ax.tick_params(axis='both', labelsize=14)
             ax.legend()
             ax.grid(True, alpha=0.3)
         else:
@@ -750,7 +848,8 @@ Verification:
         
         # 使用现有方法绘制
         self._plot_structure(mock_optimizer, ax, mock_optimizer.final_areas, 
-                            title="Ground Structure", linewidth_mode='uniform')
+                            title="Ground Structure", linewidth_mode='uniform',
+                            fill_nodes=False, style="ground_outline")
         
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')

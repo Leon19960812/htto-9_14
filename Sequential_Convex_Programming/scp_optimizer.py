@@ -5,10 +5,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import warnings
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Set
 import json
 import csv
 import os
+from pathlib import Path
 
 # 抑制libpng警告
 warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
@@ -35,8 +36,13 @@ class SequentialConvexTrussOptimizer:
                  enable_middle_layer=False, middle_layer_ratio=0.85,
                  enable_aasi: bool = False,
                  polar_rings: 'Optional[list]' = None,
+                 k_theta_steps: int = 2,
+                 output_dir: 'Optional[str]' = None,
                  simple_loads: bool = False,
-                 enforce_symmetry: bool = False):
+                 enforce_symmetry: bool = False,
+                 enable_symmetry_repair: bool = False,
+                 shell_fig_dir: Optional[Path] = None,
+                 save_shell_iter: bool = False):
         """初始化优化器"""
         print("Initializing SCP...")
         
@@ -49,6 +55,16 @@ class SequentialConvexTrussOptimizer:
         self.enable_aasi = enable_aasi
         # 是否启用对称约束
         self.enable_symmetry = bool(enforce_symmetry)
+        self.enable_symmetry_repair = bool(enable_symmetry_repair)
+        # 输出目录（用于优化日志等）
+        self.output_dir = None
+        try:
+            if output_dir is not None:
+                p = Path(str(output_dir))
+                p.mkdir(parents=True, exist_ok=True)
+                self.output_dir = str(p)
+        except Exception:
+            self.output_dir = None
 
         # 1. 初始化基础系统
         polar_config = {"rings": polar_rings} if polar_rings else None
@@ -60,13 +76,52 @@ class SequentialConvexTrussOptimizer:
             volume_fraction=volume_fraction,
             enable_middle_layer=enable_middle_layer,
             middle_layer_ratio=middle_layer_ratio,
+            k_theta_steps=int(k_theta_steps),
             polar_config=polar_config if polar_config is not None else {},
             simple_loads=bool(simple_loads),
         )
-        
+        if shell_fig_dir is not None and save_shell_iter:
+            load_calc_init = getattr(self.initializer, 'load_calc', None)
+            if load_calc_init is not None and hasattr(load_calc_init, 'figure_output_dir'):
+                load_calc_init.figure_output_dir = shell_fig_dir
+
         # 2. 从初始化器获取所有必要属性
         self.__dict__.update(self.initializer.__dict__)
-        
+        self._save_shell_iter = bool(save_shell_iter)
+        self._shell_fig_dir: Optional[Path] = shell_fig_dir if self._save_shell_iter else None
+        self._shell_snapshot_count: int = 0
+        if getattr(self, 'load_calc', None) is not None:
+            if self._save_shell_iter:
+                if self._shell_fig_dir is not None:
+                    try:
+                        Path(self._shell_fig_dir).mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+                if hasattr(self.load_calc, 'figure_output_dir'):
+                    self.load_calc.figure_output_dir = None
+            elif hasattr(self.load_calc, 'figure_output_dir'):
+                self.load_calc.figure_output_dir = self._shell_fig_dir
+            if hasattr(self.load_calc, 'current_iteration'):
+                self.load_calc.current_iteration = None
+
+        # 载荷滤波配置：默认在启用壳体载荷时打开 FIR 平滑
+        enabled_filter = bool(
+            getattr(self, 'load_calc', None)
+            and getattr(self.load_calc, 'enable_shell', False)
+            and not getattr(self, 'use_simple_loads', False)
+        )
+        self.load_filter_config: Dict[str, float] = {
+            'enabled': enabled_filter,
+            'window': 5,
+            'decay': 0.6,
+            'min_history': 2,
+        }
+        if getattr(self, 'load_calc', None) and hasattr(self.load_calc, 'configure_filter'):
+            try:
+                self.load_calc.configure_filter(self.load_filter_config)
+            except Exception as exc:
+                print(f"Warning: failed to configure load filter: {exc}")
+
         # 4. 设置优化参数
         self._setup_optimization_params()
         
@@ -82,7 +137,14 @@ class SequentialConvexTrussOptimizer:
         self.strict_mode = True
         # 节点融合开关（默认禁用；逐步打通后可启用）
         self.enable_node_merge = True
-        self.node_merge_threshold = 0.1
+        self.node_merge_threshold = 0.2
+        # 迭代内的“共线熔合”开关与参数（默认关闭；用于Phase B/C期间做安全拓扑清理）
+        self.enable_collinear_melt_iter = False
+        self.collinear_mode = 'volume'     # or 'stiffness'
+        self.collinear_tol = 1e-2
+        self.collinear_minlen = 1e-4
+        # 哪些阶段启用：'A','B','C','AB','BC','ABC'
+        self.collinear_iter_phase = 'ABC'
 
     # -------------------------------------------------------------
     # Utility: run a single SDP subproblem for diagnostics/benchmark
@@ -175,6 +237,8 @@ class SequentialConvexTrussOptimizer:
         self.current_compliance = None
         self.trust_radius = self.trust_region_params.initial_radius
         self.iteration_count = 0
+        # 连续拒绝计数器（用于最小信赖域处的驻点判停）
+        self._consecutive_rejects = 0
         # 映射：优化变量 θ 的索引 -> node_id（初始化为 load_nodes 全量，后续按 θ 长度截取）
         try:
             self.theta_node_ids = list(getattr(self.geometry, 'load_nodes', []))
@@ -203,6 +267,9 @@ class SequentialConvexTrussOptimizer:
         self.symmetry_member_fixed = []
         self.area_symmetry_active = False
         self.symmetry_active = False
+        # Load-freezing support
+        self.frozen_load_vector = None
+        self._use_frozen_load = False
 
     def _update_theta_move_caps(self, theta_len: int):
         """Compute per-node move caps based on incident shortest member length.
@@ -302,6 +369,17 @@ class SequentialConvexTrussOptimizer:
         # 记录 θ 映射（按当前优化变量的节点顺序）
         self.theta_node_ids = theta_ids
         self._prepare_symmetry_constraints(theta_ids)
+
+        # Rebuild areas if symmetry repair added members during initialization
+        if int(A_k.size) != int(self.n_elements):
+            if getattr(self, 'element_lengths', None) is None or len(self.element_lengths) != int(self.n_elements):
+                self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+            A_k = self.initialization_manager.initialize_areas(
+                self.n_elements,
+                self.element_lengths,
+                self.volume_constraint
+            )
+
         return theta_k, A_k
 
     def _prepare_symmetry_constraints(self, theta_ids: List[int]) -> None:
@@ -390,20 +468,191 @@ class SequentialConvexTrussOptimizer:
         # 镜像节点映射与构件面积对称配对
         try:
             mirror_map = self._build_full_node_mirror_map(pg.nodes, angle_tol, center_tol, radius_precision)
-            member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
-        except Exception as area_err:
-            print(f" Area symmetry disabled: {area_err}")
+        except Exception as map_err:
+            print(f"Symmetry constraints disabled while building mirror map: {map_err}")
+            self.enable_symmetry = False
             self.node_mirror_map = {}
             self.symmetry_member_pairs = []
             self.symmetry_member_fixed = []
             self.area_symmetry_active = False
-        else:
-            self.node_mirror_map = mirror_map
-            self.symmetry_member_pairs = member_pairs
-            self.symmetry_member_fixed = member_fixed
-            self.area_symmetry_active = bool(member_pairs)
-            if self.area_symmetry_active:
-                print(f"Area symmetry enabled: {len(member_pairs)} mirror member pairs.")
+            return
+
+        self.node_mirror_map = mirror_map
+
+        member_pairs: List[Tuple[int, int]] = []
+        member_fixed: List[int] = []
+        try:
+            member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
+        except Exception as area_err:
+            repair_logs: List[str] = []
+            needs_repair = isinstance(area_err, ValueError) and "mirror member" in str(area_err)
+            if needs_repair and getattr(self, 'enable_symmetry_repair', False):
+                repair_logs = self._enforce_member_symmetry(mirror_map)
+                for msg in repair_logs:
+                    print(f"[Symmetry][repair] {msg}")
+                if repair_logs:
+                    try:
+                        member_pairs, member_fixed = self._build_member_symmetry_pairs(mirror_map)
+                    except Exception as second_err:
+                        print(f" Area symmetry disabled after repair attempt: {second_err}")
+                        member_pairs, member_fixed = [], []
+                else:
+                    print(f" Area symmetry disabled: {area_err}")
+                    member_pairs, member_fixed = [], []
+            else:
+                if needs_repair and not getattr(self, 'enable_symmetry_repair', False):
+                    print(f" Area symmetry disabled (symmetry repair disabled): {area_err}")
+                else:
+                    print(f" Area symmetry disabled: {area_err}")
+                member_pairs, member_fixed = [], []
+
+        self.symmetry_member_pairs = member_pairs
+        self.symmetry_member_fixed = member_fixed
+        self.area_symmetry_active = bool(member_pairs)
+        if self.area_symmetry_active:
+            print(f"Area symmetry enabled: {len(member_pairs)} mirror member pairs.")
+
+    def _pair_merge_groups_by_symmetry(
+        self,
+        merge_groups: List[List[int]],
+    ) -> Tuple[List[List[int]], List[str]]:
+        """Ensure node merge groups include mirrored counterparts when available."""
+        if not merge_groups:
+            return [], []
+        normalized_groups: List[List[int]] = []
+        for group in merge_groups:
+            if not group:
+                continue
+            seen_nodes: Set[int] = set()
+            int_group: List[int] = []
+            for nid in group:
+                try:
+                    node_id = int(nid)
+                except Exception:
+                    continue
+                if node_id not in seen_nodes:
+                    int_group.append(node_id)
+                    seen_nodes.add(node_id)
+            if int_group:
+                normalized_groups.append(int_group)
+        if not normalized_groups:
+            return [], []
+        if not getattr(self, "enable_symmetry", False):
+            return normalized_groups, []
+        mirror_map = getattr(self, "node_mirror_map", None)
+        if not mirror_map:
+            return normalized_groups, []
+
+        paired_groups: List[List[int]] = []
+        warnings: List[str] = []
+        processed: Set[frozenset] = set()
+        group_lookup: Dict[frozenset, List[int]] = {
+            frozenset(group): group for group in normalized_groups
+        }
+
+        for group in normalized_groups:
+            group_key = frozenset(group)
+            if group_key in processed:
+                continue
+
+            mirror_nodes: List[int] = []
+            missing_nodes: List[int] = []
+            for nid in group:
+                mirrored = mirror_map.get(nid)
+                if mirrored is None:
+                    missing_nodes.append(int(nid))
+                else:
+                    mirror_nodes.append(int(mirrored))
+
+            if missing_nodes:
+                warnings.append(
+                    f"merge group {group} skipped: missing mirror nodes {missing_nodes}"
+                )
+                continue
+
+            mirror_key = frozenset(mirror_nodes)
+
+            if mirror_key == group_key:
+                paired_groups.append(group)
+                processed.add(group_key)
+                continue
+
+            mirror_group = group_lookup.get(mirror_key)
+            if mirror_group is None:
+                warnings.append(
+                    f"merge group {group} skipped: mirrored counterpart {sorted(mirror_nodes)} not found"
+                )
+                continue
+
+            if mirror_key in processed:
+                processed.add(group_key)
+                continue
+
+            paired_groups.append(group)
+            paired_groups.append(mirror_group)
+            processed.add(group_key)
+            processed.add(mirror_key)
+
+        return paired_groups, warnings
+
+    def _enforce_member_symmetry(self, mirror_map: Dict[int, int]) -> List[str]:
+        """Ensure each member has a mirrored counterpart by adding missing edges."""
+        geometry = getattr(self, "geometry", None)
+        if geometry is None:
+            return []
+        elements_raw = getattr(geometry, "elements", None) or []
+        if not elements_raw:
+            return []
+        elements = [list(map(int, pair)) for pair in elements_raw]
+        area_list = None
+        if getattr(self, "current_areas", None) is not None:
+            try:
+                area_list = np.asarray(self.current_areas, dtype=float).tolist()
+            except Exception:
+                area_list = None
+        key_to_indices: Dict[Tuple[int, int], List[int]] = {}
+        for idx, pair in enumerate(elements):
+            key = tuple(sorted(pair))
+            key_to_indices.setdefault(key, []).append(idx)
+        changes: List[str] = []
+        new_elements = elements.copy()
+        for idx, pair in enumerate(elements):
+            n1, n2 = pair
+            m1 = mirror_map.get(n1)
+            m2 = mirror_map.get(n2)
+            if m1 is None or m2 is None:
+                continue
+            mirror_key = tuple(sorted((int(m1), int(m2))))
+            key = tuple(sorted((n1, n2)))
+            if mirror_key == key:
+                continue
+            if mirror_key not in key_to_indices:
+                new_elements.append([int(m1), int(m2)])
+                key_to_indices[mirror_key] = [len(new_elements) - 1]
+                if area_list is not None:
+                    base_area = area_list[idx] if idx < len(area_list) else float(self.A_min if hasattr(self, "A_min") else 0.0)
+                    area_list.append(base_area)
+                changes.append(f"added mirror element ({int(m1)},{int(m2)}) for ({n1},{n2})")
+        if not changes:
+            return []
+        geometry.elements = [list(pair) for pair in new_elements]
+        geometry.n_elements = len(new_elements)
+        self.geometry = geometry
+        self.n_elements = geometry.n_elements
+        if area_list is not None:
+            self.current_areas = np.asarray(area_list, dtype=float)
+        # Recompute element lengths & stiffness caches after modification
+        self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+        if hasattr(self.initializer, "element_lengths"):
+            self.initializer.element_lengths = self.element_lengths
+        if hasattr(self.initializer, "geometry"):
+            self.initializer.geometry = self.geometry
+        self.unit_stiffness_matrices = self.stiffness_calc.precompute_unit_stiffness_matrices(
+            self.geometry, self.element_lengths
+        )
+        if hasattr(self.initializer, "unit_stiffness_matrices"):
+            self.initializer.unit_stiffness_matrices = self.unit_stiffness_matrices
+        return changes
 
     def _check_node_set_symmetry(self, node_ids: List[int], nodes_by_id: dict, angle_tol: float, center_tol: float) -> bool:
         """判断给定节点集合在 θ 上是否关于 y 轴对称。"""
@@ -605,6 +854,7 @@ class SequentialConvexTrussOptimizer:
         self._record_iteration_state(0, theta_k, A_k)
         # 初始化接受历史（第0次）
         self.compliance_history = [self.current_compliance]
+        self._accepted_improvements = []
         
         print(f"Initial settings:")
         print(f"  Nodes: {len(theta_k)}")
@@ -660,7 +910,9 @@ class SequentialConvexTrussOptimizer:
                 
                 # 缓存梯度信息用于预测柔度计算
                 try:
-                    grad_theta, grad_A = self.subproblem_solver.gradient_calc.compute_gradients(theta_k)
+                    grad_theta, grad_A = self.subproblem_solver.gradient_calc.compute_gradients(
+                        theta_k, A_k
+                    )
                     
                     # 验证梯度有效性
                     if grad_theta is None or grad_A is None:
@@ -808,6 +1060,11 @@ class SequentialConvexTrussOptimizer:
                 
                 # 接受或拒绝步长
                 if accept_step:
+                    # 接受步则清零连续拒绝计数
+                    try:
+                        self._consecutive_rejects = 0
+                    except Exception:
+                        pass
                     # 先检查收敛（用更新前的值）
                     if self.convergence_checker.check_convergence(theta_k, theta_new, A_k, A_new):
                         if getattr(self, 'enable_aasi', False):
@@ -820,11 +1077,39 @@ class SequentialConvexTrussOptimizer:
                     A_k = A_new
 
                     old_compliance = self.current_compliance
-                    self.current_compliance = self.system_calculator.compute_actual_compliance(theta_new, A_new)
-                    
-                    improvement = (old_compliance - self.current_compliance) / old_compliance * 100
+                    pending_quality = getattr(self, '_pending_quality', None)
+                    blended_load = None
+                    used_cached = False
+                    if isinstance(pending_quality, dict):
+                        try:
+                            theta_cached = np.asarray(pending_quality.get('theta', []), dtype=float)
+                            A_cached = np.asarray(pending_quality.get('A', []), dtype=float)
+                            if (theta_cached.shape == theta_new.shape and A_cached.shape == A_new.shape
+                                    and np.allclose(theta_cached, theta_new)
+                                    and np.allclose(A_cached, A_new)):
+                                self.current_compliance = float(pending_quality.get('actual', old_compliance))
+                                blended_load = pending_quality.get('blended_load', None)
+                                used_cached = True
+                        except Exception:
+                            used_cached = False
+                    if not used_cached:
+                        self._use_frozen_load = False
+                        self.current_compliance = self.system_calculator.compute_actual_compliance(theta_new, A_new)
+                    else:
+                        self._use_frozen_load = False
+                    if blended_load is not None:
+                        try:
+                            self.frozen_load_vector = np.asarray(blended_load, dtype=float).copy()
+                        except Exception:
+                            pass
+                    try:
+                        self._pending_quality = None
+                    except Exception:
+                        pass
+
+                    improvement = (old_compliance - self.current_compliance) / max(abs(old_compliance), 1.0) * 100
                     success_count += 1
-                    
+
                     print(f"   Accepted step (success #{success_count})")
                     print(f"   Compliance: {old_compliance:.6e} → {self.current_compliance:.6e}")
                     print(f"   Improvement: {improvement:.2f}%")
@@ -867,10 +1152,20 @@ class SequentialConvexTrussOptimizer:
                     self._record_iteration_state(self.iteration_count + 1, theta_k, A_k)
                     # 记录接受后的柔度
                     self.compliance_history.append(self.current_compliance)
+                    self._accepted_improvements.append(improvement)
+                    self._save_shell_displacement()
                     # 回写接受标记到最后一个 step_detail
                     if hasattr(self, 'step_details') and self.step_details:
                         self.step_details[-1]['accepted'] = True
                         self.step_details[-1]['accepted_compliance'] = self.current_compliance
+
+                    # 额外收敛判据：连续三次接受步的改进幅度均小于0.1%
+                    if len(self._accepted_improvements) >= 1:
+                        recent_impr = [abs(v) for v in self._accepted_improvements[-3:]]
+                        if all(val < 0.01 for val in recent_impr):
+                            print("\n🎉 Algorithm converged (compliance change < 0.01% over last 3 accepted steps)")
+                            self._converged_reason = 'compliance_stall'
+                            break
 
                     # —— 阶段切换 ——
                     if len(self._accepted_window) >= 5:
@@ -905,12 +1200,17 @@ class SequentialConvexTrussOptimizer:
                     if getattr(self, 'enable_node_merge', False):
                         theta_ids_current = list(self.theta_node_ids) if getattr(self, 'theta_node_ids', None) else []
                         merge_threshold = getattr(self, 'node_merge_threshold', 0.1)
-                        merge_groups = self.initializer.find_merge_groups(
+                        merge_groups_raw = self.initializer.find_merge_groups(
                             theta_ids=theta_ids_current,
                             merge_threshold=merge_threshold,
                             areas=A_k,
                             removal_threshold=getattr(self, 'removal_threshold', None),
                         )
+                        merge_groups = merge_groups_raw or []
+                        if merge_groups:
+                            merge_groups, symmetry_logs = self._pair_merge_groups_by_symmetry(merge_groups)
+                            for msg in symmetry_logs:
+                                print(f"[NodeMerge][symmetry] {msg}")
                         if merge_groups:
                             def _fmt_group(group):
                                 head = group[0]
@@ -985,6 +1285,9 @@ class SequentialConvexTrussOptimizer:
                             if symmetry_refresh_needed:
                                 try:
                                     self._prepare_symmetry_constraints(self.theta_node_ids)
+                                    if getattr(self, 'current_areas', None) is not None:
+                                        A_k = np.asarray(self.current_areas, dtype=float)
+                                        self.current_areas = A_k
                                 except Exception as sym_err:
                                     print(f"    Failed to rebuild symmetry constraints: {sym_err}")
                             # 重新计算逐点步长帽
@@ -999,11 +1302,44 @@ class SequentialConvexTrussOptimizer:
                             except Exception as _e:
                                 print(f"    Failed to recompute compliance after merge: {_e}")
                             
-                            print(f"   Recomputed cached stiffness matrices; {len(self.unit_stiffness_matrices)} elements total")                        
-                    
+                            print(f"   Recomputed cached stiffness matrices; {len(self.unit_stiffness_matrices)} elements total")
+                    # 共线熔合（迭代内拓扑清理；仅在允许的阶段触发）
+                    try:
+                        A_after_melt, changed = self._apply_iterative_collinear_melt(coords_latest, A_k)
+                        if changed:
+                            # 同步局部变量与当前状态
+                            A_k = np.asarray(A_after_melt, dtype=float)
+                            self.current_areas = A_k
+                    except Exception as _e:
+                        print(f"[CollinearMelt] error: {_e}")
+
                 else:
                     print("❌ Rejected step")
                     print(f"   Keeping current solution; compliance: {self.current_compliance:.6e}")
+                    try:
+                        self._pending_quality = None
+                    except Exception:
+                        pass
+                    # 在最小信赖域附近累计拒绝步并判停
+                    try:
+                        self._consecutive_rejects = int(getattr(self, '_consecutive_rejects', 0)) + 1
+                    except Exception:
+                        self._consecutive_rejects = 1
+                    # 判定是否处于最小信赖域（留出5%松弛，避免浮点误差）
+                    try:
+                        min_tr = float(self.trust_region_params.min_radius)
+                        at_min_tr = bool(self.trust_radius <= 1.05 * min_tr)
+                    except Exception:
+                        at_min_tr = False
+                    # 连续K次拒绝则认为到达局部驻点，终止优化
+                    K_reject = 3
+                    if at_min_tr and self._consecutive_rejects >= K_reject:
+                        print("\n🎉 Algorithm converged (no descent step within minimum trust region; consecutive rejects)")
+                        try:
+                            self._converged_reason = 'no_descent_min_trust_region'
+                        except Exception:
+                            pass
+                        break
                     # 回写拒绝标记到最后一个 step_detail
                     if hasattr(self, 'step_details') and self.step_details:
                         self.step_details[-1]['accepted'] = False
@@ -1243,10 +1579,26 @@ class SequentialConvexTrussOptimizer:
             self.geometry, A, element_lengths, element_directions
         )
     
-    def _compute_load_vector(self, node_coords: np.ndarray) -> np.ndarray:
+    def _compute_load_vector(self, node_coords: np.ndarray, return_jacobian: bool = False) -> np.ndarray:
         """计算载荷向量 - 使用壳体FEA动态计算"""
         # 统一通过 load_calc 接口调用，避免重复计算
-        return self.load_calc.compute_load_vector(node_coords, self.geometry.load_nodes, self.depth)
+        if hasattr(self.load_calc, 'current_iteration'):
+            try:
+                self.load_calc.current_iteration = self.iteration_count
+            except Exception:
+                pass
+        if hasattr(self.load_calc, 'figure_output_dir'):
+            try:
+                self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
+            except Exception:
+                pass
+        load_vec = self.load_calc.compute_load_vector(
+            node_coords,
+            self.geometry.load_nodes,
+            self.depth,
+            return_jacobian=return_jacobian,
+        )
+        return load_vec
     
     def _clear_linearization_cache(self):
         """清除线性化缓存，强制重线性化"""
@@ -1275,14 +1627,11 @@ class SequentialConvexTrussOptimizer:
         """重新初始化载荷计算器（节点融合后需要更新Shell FEA网格）"""
         try:
             from .load_calculator_with_shell import LoadCalculatorWithShell
-            shell_params = {
-                'outer_radius': self.radius,
-                'depth': self.depth,
-                'thickness': 0.01,
-                'n_circumferential': 20,  # 使用固定的20个周向网格
-                'n_radial': 4,  # 使用固定的2个径向网格
-                'E_shell': self.material_data.E_steel * 1000
-            }
+            shell_params = dict(getattr(self, 'shell_params', {}) or {})
+            # Ensure shell outer radius so that inner wall coincides with truss radius
+            thickness = float(shell_params.get('thickness', 0.1))
+            shell_params['outer_radius'] = float(self.radius + thickness)
+            shell_params['depth'] = self.depth
             simple_mode = bool(getattr(self, 'use_simple_loads', False))
             self.load_calc = LoadCalculatorWithShell(
                 material_data=self.material_data,
@@ -1290,6 +1639,19 @@ class SequentialConvexTrussOptimizer:
                 shell_params=shell_params,
                 simple_mode=simple_mode,
             )
+            self.shell_params = shell_params
+            if hasattr(self.load_calc, 'figure_output_dir'):
+                if self._save_shell_iter:
+                    self.load_calc.figure_output_dir = None
+                else:
+                    self.load_calc.figure_output_dir = getattr(self, '_shell_fig_dir', None)
+            if hasattr(self.load_calc, 'current_iteration'):
+                self.load_calc.current_iteration = self.iteration_count
+            if hasattr(self.load_calc, 'configure_filter'):
+                try:
+                    self.load_calc.configure_filter(self.load_filter_config)
+                except Exception as exc:
+                    print(f" load filter reconfiguration failed: {exc}")
             print(" reinitialized load calculator with shell FEA.")
         except Exception as e:
             print(f"reinitialization failed: {e}")
@@ -1356,6 +1718,161 @@ class SequentialConvexTrussOptimizer:
             for eid, val in enumerate(area_arr):
                 self.area_history_records.append((int(iteration), int(eid), float(val)))
 
+    def _save_shell_displacement(self) -> None:
+        if not getattr(self, '_save_shell_iter', False):
+            return
+        shell_dir = getattr(self, '_shell_fig_dir', None)
+        shell = getattr(getattr(self, 'load_calc', None), 'shell_fea', None)
+        if shell_dir is None or shell is None or not hasattr(shell, 'visualize_last_solution'):
+            return
+        if getattr(shell, '_last_displacement', None) is None:
+            return
+        try:
+            path = Path(shell_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            idx = max(0, int(getattr(self, '_shell_snapshot_count', 0)))
+            fname = path / f"shell_disp_iter_{idx:03d}.png"
+            shell.visualize_last_solution(scale=None, save_path=str(fname))
+            self._shell_snapshot_count = idx + 1
+        except Exception as exc:
+            print(f"Warning: failed to save shell displacement figure: {exc}")
+
+    def _apply_iterative_collinear_melt(self, node_coords: np.ndarray, A_vec: np.ndarray) -> tuple:
+        """尝试在迭代中进行一次共线单元熔合（i–j, j–k -> i–k）。
+
+        输入：
+        - node_coords: 当前theta对应的节点坐标（n,2）
+        - A_vec: 与 self.geometry.elements 对齐的面积数组
+
+        返回：(A_new, changed: bool)
+        若未启用或不满足阶段条件，则直接返回 (A_vec, False)。
+        """
+        try:
+            if not getattr(self, 'enable_collinear_melt_iter', False):
+                return A_vec, False
+            phase = str(getattr(self, 'phase', 'A'))
+            allow = str(getattr(self, 'collinear_iter_phase', 'B')).upper()
+            if (allow == 'A' and phase != 'A') or \
+               (allow == 'B' and phase != 'B') or \
+               (allow == 'C' and phase != 'C') or \
+               (allow == 'AB' and phase not in ('A','B')) or \
+               (allow == 'BC' and phase not in ('B','C')) or \
+               (allow == 'ABC' and phase not in ('A','B','C')):
+                return A_vec, False
+        except Exception:
+            return A_vec, False
+
+        # 构造白名单：支撑节点、载荷节点不移除
+        try:
+            fixed_dofs = getattr(self, 'fixed_dofs', []) or []
+            whitelist_from_dofs = sorted(set(int(d // 2) for d in fixed_dofs))
+        except Exception:
+            whitelist_from_dofs = []
+        try:
+            ln = getattr(getattr(self, 'geometry', None), 'load_nodes', []) or []
+            whitelist_nodes = sorted(set(list(whitelist_from_dofs) + list(ln)))
+        except Exception:
+            whitelist_nodes = whitelist_from_dofs
+
+        # 执行熔合
+        try:
+            from tools.collinear_cleanup import melt_collinear
+            elems = [tuple(map(int, e)) for e in (self.geometry.elements or [])]
+            elems_new, A_new, merged = melt_collinear(
+                nodes_xy=np.asarray(node_coords, dtype=float),
+                elements=elems,
+                areas=np.asarray(A_vec, dtype=float),
+                whitelist_nodes=whitelist_nodes,
+                tol=float(getattr(self, 'collinear_tol', 1e-8)),
+                min_len=float(getattr(self, 'collinear_minlen', 1e-8)),
+                mode=str(getattr(self, 'collinear_mode', 'volume')),
+                active_threshold=float(getattr(self, 'removal_threshold', 0.0) or 0.0),
+                a_max=float(getattr(self, 'A_max', None)) if getattr(self, 'A_max', None) is not None else None,
+            )
+        except Exception as e:
+            print(f"[CollinearMelt] skipped due to error: {e}")
+            return A_vec, False
+
+        if not merged:
+            return A_vec, False
+
+        # 应用到几何与优化器状态
+        try:
+            # 更新几何元素
+            new_elements = [list(map(int, p)) for p in elems_new]
+            self.geometry.elements = new_elements
+            self.geometry.n_elements = len(new_elements)
+            # 同步到 initializer 的几何（与 node_merge 对齐）
+            try:
+                if hasattr(self, 'initializer') and getattr(self.initializer, 'geometry', None) is not None:
+                    self.initializer.geometry = self.geometry
+            except Exception:
+                pass
+            # 同步别名
+            self.elements = self.geometry.elements
+            self.n_elements = self.geometry.n_elements
+            # 节点与集合（节点不变，但保持引用一致）
+            try:
+                self.nodes = self.geometry.nodes
+                self.load_nodes = getattr(self.geometry, 'load_nodes', [])
+                self.inner_nodes = getattr(self.geometry, 'inner_nodes', [])
+                if hasattr(self.geometry, 'middle_nodes'):
+                    self.middle_nodes = getattr(self.geometry, 'middle_nodes')
+            except Exception:
+                pass
+            # 重新计算几何、刚度基元
+            self.element_lengths = self.geometry_calc.compute_element_lengths(self.geometry)
+            self.unit_stiffness_matrices = self.stiffness_calc.precompute_unit_stiffness_matrices(
+                self.geometry, self.element_lengths
+            )
+            # 同步到 PolarGeometry 作为唯一真源
+            try:
+                if hasattr(self, 'polar_geometry') and self.polar_geometry is not None:
+                    self.polar_geometry.rebuild_from_geometry(self.geometry)
+            except Exception as _e:
+                print(f"    Failed to sync PolarGeometry after collinear-melt: {_e}")
+            # 重新计算边界条件（与 node_merge 对齐）
+            try:
+                if hasattr(self, 'constraint_calc') and self.constraint_calc is not None:
+                    fixed_dofs, free_dofs = self.constraint_calc.setup_boundary_conditions(self.geometry)
+                    self.fixed_dofs = fixed_dofs
+                    self.free_dofs = free_dofs
+            except Exception as _e:
+                print(f"    Failed to rebuild boundary conditions after collinear-melt: {_e}")
+            # 需要时刷新对称约束与 θ 步长帽
+            try:
+                if bool(getattr(self, 'enable_symmetry', False)) and getattr(self, 'theta_node_ids', None):
+                    self._prepare_symmetry_constraints(self.theta_node_ids)
+            except Exception as _e:
+                print(f"    Failed to rebuild symmetry constraints after collinear-melt: {_e}")
+            try:
+                n_theta = len(self.theta_node_ids) if getattr(self, 'theta_node_ids', None) else (len(self.current_angles) if getattr(self, 'current_angles', None) is not None else 0)
+                if n_theta > 0:
+                    self._update_theta_move_caps(n_theta)
+            except Exception:
+                pass
+            # 更新当前面积与缓存
+            A_new = np.asarray(A_new, dtype=float)
+            self.current_areas = A_new
+            # 强制重线性化
+            self._clear_linearization_cache()
+            # 载荷计算器（可能不需要，但与 node_merge 对齐重建一次更稳妥）
+            try:
+                self._reinitialize_load_calculator()
+            except Exception as _e:
+                print(f"    Failed to reinitialize load calculator after collinear-melt: {_e}")
+            # 合并后重算柔度，保证一致
+            try:
+                self.current_compliance = self.system_calculator.compute_actual_compliance(self.current_angles, A_new)
+                print(f"   Re-evaluated compliance after collinear-melt: {self.current_compliance:.6e}")
+            except Exception as _e:
+                print(f"    Failed to recompute compliance after collinear-melt: {_e}")
+            print(f"[CollinearMelt] merged {len(merged)} node(s) into straight members; elements now {self.n_elements}")
+            return A_new, True
+        except Exception as e:
+            print(f"[CollinearMelt] failed to apply changes: {e}")
+            return A_vec, False
+
 
     def _export_iteration_state_logs(self, export_dir: str = 'results') -> None:
         """将θ和面积的迭代历史导出为CSV。"""
@@ -1416,6 +1933,15 @@ class SequentialConvexTrussOptimizer:
         字段包含：迭代号、phase、α（SPD/最终）、试探记录、ρ、cond、步长范数、信赖域变化、是否接受、柔度等。
         """
         try:
+            # 解析目标路径：若配置了 output_dir，则将文件写到该目录
+            target_path = filepath
+            try:
+                base = os.path.basename(filepath)
+                outdir = getattr(self, 'output_dir', None)
+                if outdir:
+                    target_path = os.path.join(outdir, base)
+            except Exception:
+                pass
             headers = [
                 'iteration', 'phase',
                 'alpha_spd_final', 'alpha_final',
@@ -1427,8 +1953,9 @@ class SequentialConvexTrussOptimizer:
                 'current_compliance_before', 'actual_compliance', 'predicted_compliance',
                 'improvement_percent'
             ]
-            file_exists = os.path.exists(filepath)
-            with open(filepath, 'a', newline='', encoding='utf-8') as f:
+            os.makedirs(os.path.dirname(target_path) or '.', exist_ok=True)
+            file_exists = os.path.exists(target_path)
+            with open(target_path, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=headers)
                 if not file_exists:
                     writer.writeheader()

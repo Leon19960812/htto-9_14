@@ -12,7 +12,7 @@ from dataclasses import dataclass
 @dataclass
 class ShellMaterialData:
     """壳体材料数据"""
-    E: float = 210e7          # 弹性模量 (Pa) - 比桁架大10倍
+    E: float = 210e9          # 弹性模量 (Pa) - 比桁架大10倍
     nu: float = 0.3           # 泊松比
     thickness: float = 0.1   # 厚度 (m)
     rho_water: float = 1025   # 水密度 (kg/m³)  
@@ -23,7 +23,9 @@ class ShellMeshData:
     """壳体网格数据"""
     nodes: np.ndarray         # 节点坐标 [n_nodes, 2]
     elements: np.ndarray      # 单元连接 [n_elements, 3] (三角形单元)
-    boundary_nodes: List[int] # 外边界节点索引
+    boundary_nodes: List[int] # 外边界节点索引（外壁）
+    boundary_edges: List[Tuple[int, int]] # 外边界边列表（用于压力积分）
+    inner_boundary_nodes: List[int] # 内边界节点索引（内壁，用于支撑映射）
 
 class Shell2DFEA:
     """
@@ -40,7 +42,7 @@ class Shell2DFEA:
                  n_circumferential: int = 100, n_radial: int = 5,
                  material_data: Optional[ShellMaterialData] = None,
                  k_neighbors: int = 5,
-                 sigma_factor: float = 1.5,
+                 sigma_factor: float = 2,
                  adaptive_sigma: bool = False,
                  epsilon_weight: float = 0.05):
         """
@@ -72,14 +74,26 @@ class Shell2DFEA:
         self.sigma_factor = float(sigma_factor)
         self.adaptive_sigma = bool(adaptive_sigma)
         self.epsilon_weight = float(epsilon_weight)
-        
+        # softmax 温度系数（与 sigma_factor 一致，便于逐步替换）
+        self.softmax_tau_factor = float(sigma_factor)
+
         # 生成网格和预计算
         self._generate_shell_mesh()
         self._precompute_element_matrices()
         self._compute_pressure_loads()
         # 预计算边界节点角度（用于软权重）
         self._compute_boundary_angles()
-        
+
+        # 缓存最近一次求解结果（位移、反力、权重等）
+        self._last_displacement: Optional[np.ndarray] = None
+        self._last_reactions: Optional[np.ndarray] = None
+        self._last_support_positions: Optional[np.ndarray] = None
+        self._last_support_weights = None
+        self._last_support_softmax: Optional[List[dict]] = None
+        self._last_aug_matrix: Optional[np.ndarray] = None
+        self._last_support_matrix: Optional[np.ndarray] = None
+        self._last_rhs: Optional[np.ndarray] = None
+
         print(f"Shell2DFEA initialized:")
         print(f"  Outer radius: {outer_radius}m")
         print(f"  Depth: {depth}m") 
@@ -126,33 +140,42 @@ class Shell2DFEA:
         
         elements = np.array(elements)
         
-        # 识别边界节点（最外层）
-        boundary_nodes = list(range((self.n_radial - 1) * self.n_circumferential, 
+        # 识别外边界节点（最外层）与内边界节点（最内层）
+        boundary_nodes = list(range((self.n_radial - 1) * self.n_circumferential,
                                    self.n_radial * self.n_circumferential))
-        
+        inner_boundary_nodes = list(range(0, self.n_circumferential))
+
+        boundary_edges: List[Tuple[int, int]] = []
+        if len(boundary_nodes) >= 2:
+            for idx in range(len(boundary_nodes) - 1):
+                boundary_edges.append((boundary_nodes[idx], boundary_nodes[idx + 1]))
+            # wrap-around edge closes the semicircle (last to first)
+            boundary_edges.append((boundary_nodes[-1], boundary_nodes[0]))
+
         self.mesh = ShellMeshData(
             nodes=nodes,
             elements=elements, 
-            boundary_nodes=boundary_nodes
+            boundary_nodes=boundary_nodes,
+            boundary_edges=boundary_edges,
+            inner_boundary_nodes=inner_boundary_nodes,
         )
         
         print(f"  Generated mesh: {len(nodes)} nodes, {len(elements)} elements")
 
     def _compute_boundary_angles(self):
-        """计算外边界节点的极角，用于支撑软权重分配"""
-        bnodes = self.mesh.boundary_nodes
+        """计算内外边界节点的极角：外边界用于压力积分；内边界用于支撑映射"""
         coords = self.mesh.nodes
-        thetas = []
-        for n in bnodes:
-            x, y = coords[n]
-            theta = math.atan2(y, x)
-            # 夹到 [0, pi]
-            if theta < 0:
-                theta = 0.0
-            if theta > math.pi:
-                theta = math.pi
-            thetas.append(theta)
-        self.boundary_angles = np.array(thetas)
+        def angles_for(nodes_idx: List[int]):
+            thetas = []
+            for n in nodes_idx:
+                x, y = coords[n]
+                theta = math.atan2(y, x)
+                theta = min(max(theta, 0.0), math.pi)
+                thetas.append(theta)
+            return np.array(thetas)
+
+        self.boundary_angles_outer = angles_for(self.mesh.boundary_nodes)
+        self.boundary_angles_inner = angles_for(self.mesh.inner_boundary_nodes)
     
     def _precompute_element_matrices(self):
         """预计算单元刚度矩阵"""
@@ -216,86 +239,87 @@ class Shell2DFEA:
         return K
     
     def _compute_pressure_loads(self):
-        """计算静水压力分布载荷"""
+        """计算静水压力并映射到壳体节点"""
         print("Computing hydrostatic pressure loads...")
-        
-        # 对边界节点计算压力载荷
-        pressure_loads = np.zeros(len(self.mesh.nodes) * 2)  # [fx, fy, fx, fy, ...]
-        
+
+        pressure_loads = np.zeros(len(self.mesh.nodes) * 2, dtype=float)
+
         rho_water = self.material.rho_water
         g = self.material.g
-        
-        # 计算边界上相邻节点的弧长（均匀角度划分）
-        dtheta = np.pi / (self.n_circumferential - 1)
-        arc_length = self.outer_radius * dtheta  # 相邻边界节点间弧长
-        # 采用最外两层半径的间距作为条带“径向高度”
-        # 与 _generate_shell_mesh 中 radial_coords 一致：inner=R-t, outer=R，等距 n_radial 划分
-        radial_spacing = (self.outer_radius - (self.outer_radius - self.material.thickness)) / max(self.n_radial - 1, 1)
-        strip_area = arc_length * radial_spacing
-        
-        for node_id in self.mesh.boundary_nodes:
-            x, y = self.mesh.nodes[node_id]
-            
-            # 节点深度
-            node_depth = self.depth - y
-            
-            # 静水压力 
-            pressure = rho_water * g * node_depth
-            
-            # 压力方向：径向向内
-            r = np.sqrt(x**2 + y**2)
-            if r > 1e-12:
-                nx = -x / r  # 向内的法向量
-                ny = -y / r
+
+        boundary_nodes = np.asarray(self.mesh.boundary_nodes, dtype=int)
+        boundary_edges = getattr(self.mesh, 'boundary_edges', [])
+        if boundary_nodes.size == 0 or not boundary_edges:
+            self.pressure_loads = pressure_loads
+            print("  Total pressure load: 0 N")
+            return
+
+        boundary_edges = list(boundary_edges)
+
+        for node_i, node_j in boundary_edges:
+            p0 = self.mesh.nodes[node_i]
+            p1 = self.mesh.nodes[node_j]
+            edge_vec = p1 - p0
+            edge_length = float(np.linalg.norm(edge_vec))
+            if edge_length <= 0.0:
+                continue
+
+            midpoint = 0.5 * (p0 + p1)
+            # Midpoint rule: integrate hydrostatic pressure along the boundary edge
+            depth_local = max(0.0, self.depth - midpoint[1])
+            pressure = rho_water * g * depth_local
+
+            r_mid = float(np.linalg.norm(midpoint))
+            if r_mid > 1e-12:
+                nx = -midpoint[0] / r_mid
+                ny = -midpoint[1] / r_mid
             else:
-                nx, ny = 0, 0
-            
-            # 节点载荷（等效为外圈条带面积的均匀分配）
-            tributary_area = strip_area
-            force_magnitude = pressure * tributary_area
-            
-            pressure_loads[2*node_id] = force_magnitude * nx
-            pressure_loads[2*node_id + 1] = force_magnitude * ny
-        
+                nx, ny = 0.0, 0.0
+
+            line_force = pressure * self.material.thickness * edge_length
+            fx = line_force * nx
+            fy = line_force * ny
+
+            pressure_loads[2 * node_i] += 0.5 * fx
+            pressure_loads[2 * node_i + 1] += 0.5 * fy
+            pressure_loads[2 * node_j] += 0.5 * fx
+            pressure_loads[2 * node_j + 1] += 0.5 * fy
+
         self.pressure_loads = pressure_loads
-        
-        total_force = np.sqrt(np.sum(pressure_loads[::2]**2) + np.sum(pressure_loads[1::2]**2))
+
+        total_force_vec = pressure_loads.reshape(-1, 2).sum(axis=0)
+        total_force = float(np.linalg.norm(total_force_vec))
         print(f"  Total pressure load: {total_force:.0f} N")
-    
+
     def solve_with_support_positions(self, support_positions: np.ndarray) -> np.ndarray:
-        """
-        根据支撑位置求解壳体并返回支撑反力
-        
-        Parameters:
-        -----------
-        support_positions : np.ndarray
-            支撑位置坐标 [n_supports, 2]
-            
-        Returns:
-        --------
-        np.ndarray
-            支撑反力 [n_supports, 2] (fx, fy)
-        """
-        #print(f"Solving shell FEA with {len(support_positions)} support positions...")
-        
-        # 1. 为每个支撑点根据外圈边界节点计算高斯核软权重（k近邻）
+        """Solve the shell problem with weighted supports and return reactions."""
+        if support_positions is None or len(support_positions) == 0:
+            return np.zeros((0, 2), dtype=float)
+
+        support_positions = np.asarray(support_positions, dtype=float)
         support_weights = self._compute_support_weights(support_positions)
-        
-        # 2. 组装全局刚度矩阵
+        if not support_weights:
+            return np.zeros((0, 2), dtype=float)
+
+        # Store for downstream debugging/inspection (shallow copy is fine).
+        self._last_support_weights = list(support_weights)
+
         K_global = self._assemble_global_stiffness()
-
-        # 3. 构建软权重的位移约束（MPC：Σ w_j u(n_j) = 0），用 Lagrange 乘子实现
-        C = self._build_support_constraint_matrix(support_weights)
         n_dof = len(self.mesh.nodes) * 2
-        m = C.shape[0]  # 约束个数 = 2 * n_supports
+        C = self._build_support_constraint_matrix(support_weights)
+        m = C.shape[0]
 
-        # 增广鞍点系统 [K  C^T; C  0] [u;λ] = [f;0]
         A = np.zeros((n_dof + m, n_dof + m))
         A[:n_dof, :n_dof] = K_global
         A[:n_dof, n_dof:] = C.T
         A[n_dof:, :n_dof] = C
+
         b = np.zeros(n_dof + m)
         b[:n_dof] = self.pressure_loads
+
+        self._last_support_matrix = C.copy()
+        self._last_aug_matrix = A.copy()
+        self._last_rhs = b.copy()
 
         try:
             sol = np.linalg.solve(A, b)
@@ -303,132 +327,271 @@ class Shell2DFEA:
             print("  Warning: Indefinite/singular saddle system, using pseudo-inverse")
             sol = np.linalg.pinv(A) @ b
 
-        u = sol[:n_dof]
         lamb = sol[n_dof:]
+        # λ corresponds to the constraint forces applied by the structure on the supports;
+        # invert the sign so we return the physical support reactions (supports on shell).
+        reactions = (-lamb).reshape(-1, 2)
 
-        # 4. 以 Lagrange 乘子作为支撑反力（每个支撑两分量）
-        support_reactions = lamb.reshape(-1, 2)
+        # 缓存便于可视化与调试
+        self._last_displacement = sol[:n_dof].reshape(-1, 2)
+        self._last_reactions = reactions.copy()
+        self._last_support_positions = support_positions.copy()
+        self._last_support_weights = list(support_weights)
 
-        return support_reactions
-    
-    def _compute_support_weights(self, support_positions: np.ndarray) -> List[List[Tuple[int, float]]]:
-        """为每个支撑位置计算基于高斯核的连续软权重（使用所有外边界节点）。
-        说明：
-        - 过去的做法是选取 k 近邻并归一化，这会在近邻集合切换时产生非连续跳变；
-        - 这里改为对全部边界节点施加高斯权重并归一化，确保 f(θ) 对 θ 连续，
-          从而提升线性化预测的稳定性，降低 rho 异常的概率。
-        返回：列表，长度为 n_supports；每个元素是 [(node_idx, weight), ...]
+        total_pressure_vec = self.pressure_loads.reshape(-1, 2).sum(axis=0)
+        total_reaction_vec = reactions.sum(axis=0)
+        imbalance = total_reaction_vec + total_pressure_vec
+        imbalance_norm = float(np.linalg.norm(imbalance))
+        reference_norm = float(max(1.0, np.linalg.norm(total_pressure_vec)))
+        if imbalance_norm > 1e-3 * reference_norm:
+            print(f"  [warn] Reaction imbalance |Δ|={imbalance_norm:.2e} N")
+
+        return reactions
+
+    def get_last_support_weight_gradients(self) -> Optional[List[dict]]:
+        """Return cached softmax weights and their spatial derivatives for each support.
+
+        每个元素包含：
+            - node_indices: 边界节点索引
+            - weights: 对应 softmax 权重
+            - dw_dx/dw_dy: 权重对支撑位置 x,y 的导数
+            - dtheta_dx/dtheta_dy: 角度对坐标的导数（便于额外链式求导）
+        若尚未进行求解，则返回 None。
         """
-        weights_all: List[List[Tuple[int, float]]] = []
-        bnodes = np.array(self.mesh.boundary_nodes)
-        theta_b = self.boundary_angles  # [N_b]
-        dtheta = math.pi / max(self.n_circumferential - 1, 1)
-        # 为了自适应选择 σ，可仍然用局部 k 近邻的跨度来设置 σ，但计算权重时使用全部边界节点
-        k = max(3, min(self.k_neighbors, len(bnodes)))
 
-        for pos in support_positions:
-            x, y = float(pos[0]), float(pos[1])
-            theta = math.atan2(y, x)
-            if theta < 0:
-                theta = 0.0
-            if theta > math.pi:
-                theta = math.pi
-            # 与全部边界节点的角差
-            d_all = np.abs(theta - theta_b)
-            # σ 选择：固定比例或基于局部 k 邻域跨度的自适应
-            if self.adaptive_sigma:
-                idx_sorted = np.argsort(d_all)
-                d_nei = d_all[idx_sorted[:k]]
-                W = float(np.max(d_nei)) if len(d_nei) > 0 else dtheta
-                eps = max(1e-6, min(0.2, self.epsilon_weight))
-                sigma = W / math.sqrt(2.0 * math.log(1.0/eps)) if W > 0 else (self.sigma_factor * dtheta)
+        if not self._last_support_softmax:
+            return None
+
+        boundary_nodes = np.asarray(self.mesh.inner_boundary_nodes, dtype=int)
+        gradients: List[dict] = []
+        for cache in self._last_support_softmax:
+            gradients.append({
+                "node_indices": boundary_nodes.copy(),
+                "weights": np.asarray(cache["weights"], dtype=float).copy(),
+                "dw_dtheta": np.asarray(cache["dw_dtheta"], dtype=float).copy(),
+                "dw_dx": np.asarray(cache["dw_dx"], dtype=float).copy(),
+                "dw_dy": np.asarray(cache["dw_dy"], dtype=float).copy(),
+                "dtheta_dx": float(cache["dtheta_dx"]),
+                "dtheta_dy": float(cache["dtheta_dy"]),
+                "tau": float(cache["tau"]),
+                "theta": float(cache["support_theta"]),
+            })
+
+        return gradients
+
+    def solve_augmented_system(self, rhs: np.ndarray) -> np.ndarray:
+        """Solve the cached augmented system for a new right-hand side.
+
+        若尚未调用 `solve_with_support_positions`，则抛出异常。
+        当线性系统奇异时回退到伪逆求解。
+        """
+
+        if self._last_aug_matrix is None:
+            raise RuntimeError("Augmented system is not initialized; call solve_with_support_positions first.")
+
+        A = self._last_aug_matrix
+        rhs = np.asarray(rhs, dtype=float)
+        if rhs.shape[0] != A.shape[0]:
+            raise ValueError("Right-hand side dimension does not match augmented system.")
+
+        try:
+            return np.linalg.solve(A, rhs)
+        except np.linalg.LinAlgError:
+            return np.linalg.pinv(A) @ rhs
+
+    def build_support_constraint_derivative(self, support_index: int, axis: str) -> np.ndarray:
+        """Construct ∂C/∂p for the given support index and coordinate axis ('x' or 'y')."""
+
+        if self._last_support_matrix is None:
+            raise RuntimeError("Support matrix is unavailable; solve the shell system first.")
+
+        gradients = self.get_last_support_weight_gradients()
+        if gradients is None or support_index >= len(gradients):
+            raise IndexError("Support index out of range for derivative construction.")
+
+        axis = axis.lower()
+        if axis not in ("x", "y"):
+            raise ValueError("Axis must be 'x' or 'y'.")
+
+        jac_row = gradients[support_index]["dw_dx" if axis == "x" else "dw_dy"]
+        node_indices = gradients[support_index]["node_indices"]
+        dC = np.zeros_like(self._last_support_matrix, dtype=float)
+        row0 = 2 * support_index
+        row1 = row0 + 1
+        for idx, weight_grad in zip(node_indices, jac_row):
+            idx = int(idx)
+            dC[row0, 2 * idx] += float(weight_grad)
+            dC[row1, 2 * idx + 1] += float(weight_grad)
+        return dC
+
+    def get_last_solution(self) -> Optional[dict]:
+        """Return cached (u, λ, C, A) for reuse in sensitivity calculations."""
+
+        if self._last_displacement is None or self._last_support_matrix is None:
+            return None
+        lambda_vec = None
+        if self._last_reactions is not None:
+            lambda_vec = (-np.asarray(self._last_reactions, dtype=float)).reshape(-1)
+        return {
+            "u": None if self._last_displacement is None else self._last_displacement.reshape(-1).copy(),
+            "lambda": lambda_vec,
+            "C": self._last_support_matrix.copy(),
+            "A": None if self._last_aug_matrix is None else self._last_aug_matrix.copy(),
+            "rhs": None if self._last_rhs is None else self._last_rhs.copy(),
+        }
+
+    def visualize_last_solution(self, scale: Optional[float] = None,
+                                save_path: Optional[str] = None,
+                                show_reference: bool = False,
+                                cbar_range: Optional[Tuple[float, float]] = None,
+                                disp_unit: str = 'm',
+                                overlay_segments: Optional[np.ndarray] = None,
+                                overlay_kwargs: Optional[dict] = None,
+                                overlay_truss_drawer: Optional[object] = None,
+                                show_title: bool = False,
+                                cbar_fraction: Optional[float] = None,
+                                cbar_shrink: Optional[float] = None,
+                                cmap: str = 'viridis_r') -> None:
+        """渲染最近一次求解的位移彩色云图（类似商业软件）。
+
+        Parameters
+        ----------
+        scale : float
+            位移放大系数，便于观察微小形变。
+        show_reactions : bool
+            是否在支撑位置绘制反力箭头。
+        show_normals : bool
+            是否绘制单位法向用于对比。
+        """
+        if self._last_displacement is None:
+            print("No shell solution cached; call solve_with_support_positions first.")
+            return
+
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.collections import PolyCollection, LineCollection
+            from matplotlib import colors as mcolors
+            try:
+                from mpl_toolkits.axes_grid1 import make_axes_locatable
+            except Exception:
+                make_axes_locatable = None
+        except ImportError:
+            print("Matplotlib not available for visualization")
+            return
+
+        nodes = self.mesh.nodes
+        disp = self._last_displacement
+        max_disp = float(np.max(np.linalg.norm(disp, axis=1)))
+        if scale is None:
+            if max_disp > 0.0:
+                # 将最大位移放大到壳体半径约 5% 以便观察
+                scale_use = 0.05 * self.outer_radius / max_disp
             else:
-                sigma = max(1e-12, self.sigma_factor * dtheta)
-            # 高斯权重（对全部边界节点），数值稳定处理
-            exparg = -0.5 * (d_all / sigma)**2
-            exparg -= float(np.max(exparg))  # 稳定化，避免溢出
-            w_raw = np.exp(exparg)
-            s = float(np.sum(w_raw))
-            if not np.isfinite(s) or s <= 0:
-                # 回退：均匀分布到全部边界节点
-                w = np.full_like(w_raw, 1.0 / max(1, len(w_raw)))
-            else:
-                w = w_raw / s
-            # 打包 (node_idx, weight)（包含全部边界节点，连续）
-            weights = [(int(bnodes[j]), float(w[j])) for j in range(len(bnodes))]
-            weights_all.append(weights)
-        return weights_all
-    
-    def _assemble_global_stiffness(self) -> np.ndarray:
-        """组装全局刚度矩阵"""
-        n_dof = len(self.mesh.nodes) * 2
-        K_global = np.zeros((n_dof, n_dof))
-        
-        for elem_id, element in enumerate(self.mesh.elements):
-            K_elem = self.element_stiffness_matrices[elem_id]
-            
-            # DOF映射
-            dofs = []
-            for node in element:
-                dofs.extend([2*node, 2*node+1])
-            
-            # 组装
-            for i in range(6):
-                for j in range(6):
-                    K_global[dofs[i], dofs[j]] += K_elem[i, j]
-        
-        return K_global
-    
-    def _build_support_constraint_matrix(self, support_weights: List[List[Tuple[int, float]]]) -> np.ndarray:
-        """构建 MPC 约束矩阵 C，使 Σ w_j u(n_j)=0（x/y 两个方向各一条）"""
-        n_supports = len(support_weights)
-        n_dof = len(self.mesh.nodes) * 2
-        C = np.zeros((2 * n_supports, n_dof))
-        for i, weights in enumerate(support_weights):
-            for n_idx, w in weights:
-                # x 方向约束
-                C[2*i, 2*n_idx] = C[2*i, 2*n_idx] + w
-                # y 方向约束
-                C[2*i+1, 2*n_idx+1] = C[2*i+1, 2*n_idx+1] + w
-        return C
-    
-    def _reconstruct_global_displacement(self, u_reduced: np.ndarray, 
-                                        free_dofs: List[int], support_node_ids: List[int]) -> np.ndarray:
-        """重构全局位移向量"""
-        n_dof = len(self.mesh.nodes) * 2
-        u_global = np.zeros(n_dof)
-        
-        # 填入自由度位移
-        for i, dof in enumerate(free_dofs):
-            u_global[dof] = u_reduced[i]
-        
-        # 支撑节点位移为0（已经是默认值）
-        
-        return u_global
-    
-    def _compute_support_reactions(self, K_global: np.ndarray, u_global: np.ndarray,
-                                  support_pairs: List[Tuple[int, int, float, float]]) -> np.ndarray:
-        """计算支撑反力"""
-        # 先计算每个节点的反力
-        node_react = {}
-        for n0, n1, _, _ in support_pairs:
-            for nid in (n0, n1):
-                if nid in node_react:
-                    continue
-                dofs = [2*nid, 2*nid+1]
-                rx = float(np.dot(K_global[dofs[0], :], u_global) - self.pressure_loads[dofs[0]])
-                ry = float(np.dot(K_global[dofs[1], :], u_global) - self.pressure_loads[dofs[1]])
-                node_react[nid] = (rx, ry)
-        # 将每个支撑的反力按权重从两节点汇总
-        reactions = []
-        for n0, n1, w0, w1 in support_pairs:
-            rx0, ry0 = node_react[n0]
-            rx1, ry1 = node_react[n1]
-            reactions.extend([w0*rx0 + w1*rx1, w0*ry0 + w1*ry1])
-        return np.array(reactions)
-    
+                scale_use = 1.0
+        else:
+            scale_use = float(scale)
+        displaced = nodes + scale_use * disp
+
+        elements = self.mesh.elements
+        polys = displaced[elements]
+        disp_mag_m = np.linalg.norm(disp, axis=1)
+        # Unit conversion for color values
+        unit = (disp_unit or 'm').lower()
+        if unit == 'mm':
+            disp_mag_plot = disp_mag_m * 1e3
+            cbar_label = '|u| (mm)'
+            # If user provides cbar_range in mm, use directly; otherwise None
+            norm = None
+            if cbar_range is not None and len(cbar_range) == 2:
+                vmin, vmax = float(cbar_range[0]), float(cbar_range[1])
+                if vmax <= vmin:
+                    vmax = vmin + 1e-12
+                norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+        else:
+            disp_mag_plot = disp_mag_m
+            cbar_label = '|u| (m)'
+            norm = None
+            if cbar_range is not None and len(cbar_range) == 2:
+                vmin, vmax = float(cbar_range[0]), float(cbar_range[1])
+                if vmax <= vmin:
+                    vmax = vmin + 1e-12
+                norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+
+        cell_values = np.mean(disp_mag_plot[elements], axis=1)
+
+        fig, ax = plt.subplots(figsize=(8, 6))
+        poly = PolyCollection(polys, array=cell_values, cmap=cmap, edgecolors='none', norm=norm)
+        ax.add_collection(poly)
+        # Place a colorbar that strictly matches the main axes height
+        if make_axes_locatable is not None:
+            divider = make_axes_locatable(ax)
+            size_pct = f"{int((cbar_fraction if cbar_fraction is not None else 0.04)*100)}%"
+            pad_frac = 0.02
+            cax = divider.append_axes("right", size=size_pct, pad=pad_frac)
+            cbar = fig.colorbar(poly, cax=cax)
+        else:
+            # Fallback to standard colorbar
+            frac = 0.035 if cbar_fraction is None else float(cbar_fraction)
+            shr = 0.75 if cbar_shrink is None else float(cbar_shrink)
+            cbar = fig.colorbar(poly, ax=ax, pad=0.02, fraction=frac, shrink=shr)
+        cbar.set_label(cbar_label)
+
+        if show_reference:
+            seg_ref = []
+            seg_def = []
+            for elem in elements:
+                pts_ref = nodes[elem]
+                pts_def = displaced[elem]
+                for i in range(3):
+                    j = (i + 1) % 3
+                    seg_ref.append([pts_ref[i], pts_ref[j]])
+                    seg_def.append([pts_def[i], pts_def[j]])
+            ax.add_collection(LineCollection(seg_ref, colors='lightgray', linewidths=0.4, alpha=0.6))
+            ax.add_collection(LineCollection(seg_def, colors='black', linewidths=0.6, alpha=0.8))
+
+        ax.set_aspect('equal')
+        ax.grid(True, alpha=0.3)
+        title_scale = f"auto({scale_use:.2e})" if scale is None else f"{scale_use:.2f}"
+        if show_title:
+            ax.set_title(f'Shell displacement (scale={title_scale})', fontweight='bold')
+        ax.set_xlim(np.min(displaced[:, 0]) - 0.2, np.max(displaced[:, 0]) + 0.2)
+        ax.set_ylim(np.min(displaced[:, 1]) - 0.2, np.max(displaced[:, 1]) + 0.2)
+
+        # Optional overlay of truss structure segments
+        if overlay_segments is not None:
+            try:
+                segs = np.asarray(overlay_segments, dtype=float)
+                if segs.ndim == 3 and segs.shape[-2:] == (2, 2):
+                    okw = overlay_kwargs or {}
+                    # Support either a single color or a per-segment color array
+                    colors = okw.get('colors', None)
+                    if colors is None:
+                        colors = okw.get('color', 'navy')
+                    linewidths = okw.get('linewidths', 1.0)
+                    alpha = okw.get('alpha', 0.9)
+                    lc = LineCollection(segs, colors=colors, linewidths=linewidths, alpha=alpha)
+                    ax.add_collection(lc)
+            except Exception:
+                pass
+
+        # Optional callback to draw truss using project visualization util on the same axes
+        if overlay_truss_drawer is not None:
+            try:
+                # overlay_truss_drawer is a callable taking (ax)
+                overlay_truss_drawer(ax)
+            except Exception:
+                pass
+
+        plt.tight_layout()
+        if save_path:
+            try:
+                fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            finally:
+                plt.close(fig)
+        else:
+            plt.show()
     def get_mesh_info(self) -> dict:
-        """获取网格信息，用于调试和可视化"""
+        """获取网格资料，便于调试和可视化"""
         return {
             'nodes': self.mesh.nodes,
             'elements': self.mesh.elements,
@@ -436,47 +599,153 @@ class Shell2DFEA:
             'n_nodes': len(self.mesh.nodes),
             'n_elements': len(self.mesh.elements)
         }
-    
+
     def visualize_mesh(self):
         """简单的网格可视化"""
         try:
             import matplotlib.pyplot as plt
             import matplotlib.patches as patches
-            
+
             fig, ax = plt.subplots(figsize=(10, 6))
-            
-            # 绘制单元
+
             for element in self.mesh.elements:
                 coords = self.mesh.nodes[element]
                 triangle = patches.Polygon(coords, fill=False, edgecolor='blue', alpha=0.6)
                 ax.add_patch(triangle)
-            
-            # 绘制节点
-            ax.scatter(self.mesh.nodes[:, 0], self.mesh.nodes[:, 1], 
+
+            ax.scatter(self.mesh.nodes[:, 0], self.mesh.nodes[:, 1],
                       c='red', s=20, alpha=0.7, label='Nodes')
-            
-            # 突出显示边界节点
+
             boundary_coords = self.mesh.nodes[self.mesh.boundary_nodes]
-            ax.scatter(boundary_coords[:, 0], boundary_coords[:, 1], 
+            ax.scatter(boundary_coords[:, 0], boundary_coords[:, 1],
                       c='green', s=40, alpha=0.8, label='Boundary Nodes')
-            
-            # 绘制外边界圆弧
+
             arc = patches.Arc((0, 0), 2*self.outer_radius, 2*self.outer_radius,
-                            angle=0, theta1=0, theta2=180, 
-                            linestyle='--', color='black', alpha=0.5)
+                              angle=0, theta1=0, theta2=180,
+                              linestyle='--', color='black', alpha=0.5)
             ax.add_patch(arc)
-            
+
             ax.set_xlim(-1.2 * self.outer_radius, 1.2 * self.outer_radius)
             ax.set_ylim(-0.2 * self.outer_radius, 1.2 * self.outer_radius)
             ax.set_aspect('equal')
             ax.grid(True, alpha=0.3)
             ax.legend()
             ax.set_title('Shell2D FEA Mesh')
-            
+
             plt.show()
-            
+
         except ImportError:
             print("Matplotlib not available for visualization")
+
+    def _compute_support_weights(self, support_positions: np.ndarray) -> List[List[Tuple[int, float]]]:
+        """Softmax-based mapping from support positions to boundary nodes.
+
+        通过 softmax(-Δθ^2 / τ) 构造连续可导的支撑权重。
+        返回值保持与旧接口兼容，同时缓存 softmax 中间量供灵敏度使用。
+        """
+        weights_all: List[List[Tuple[int, float]]] = []
+        boundary_nodes = np.asarray(self.mesh.inner_boundary_nodes, dtype=int)
+        if boundary_nodes.size == 0:
+            self._last_support_softmax = []
+            return weights_all
+
+        theta_b = self.boundary_angles_inner
+        # 基础角度步长，用于设定 softmax 温度
+        dtheta = math.pi / max(self.n_circumferential - 1, 1)
+        tau_base = max(1e-8, self.softmax_tau_factor * dtheta)
+
+        boundary_angles = theta_b
+        softmax_cache = []
+        for pos in support_positions:
+            x, y = float(pos[0]), float(pos[1])
+            theta = math.atan2(y, x)
+            theta = min(max(theta, 0.0), math.pi)
+
+            diff = theta - boundary_angles
+            # softmax logits 依据平方项构建
+            delta = diff
+
+            if self.adaptive_sigma:
+                # 自适应温度：兼顾局部跨度与基线
+                span = float(np.max(np.abs(diff))) if diff.size else 0.0
+                tau = max(tau_base, self.sigma_factor * max(span, dtheta) / max(1.0, math.sqrt(2.0)))
+            else:
+                tau = tau_base
+
+            inv_tau = 1.0 / tau if tau > 0 else 0.0
+            logits = -0.5 * (diff * inv_tau) ** 2
+            logits -= float(np.max(logits))
+            exp_logits = np.exp(logits)
+            sum_exp = float(np.sum(exp_logits))
+            if not np.isfinite(sum_exp) or sum_exp <= 0.0:
+                weights = np.full_like(exp_logits, 1.0 / max(1, exp_logits.size))
+            else:
+                weights = exp_logits / sum_exp
+
+            weights_all.append([
+                (int(boundary_nodes[i]), float(weights[i])) for i in range(boundary_nodes.size)
+            ])
+
+            grad_logits = -(diff) * (inv_tau ** 2)
+            # softmax梯度：dw/dtheta = w * (g_j - sum_k w_k g_k)
+            mean_grad = float(np.dot(weights, grad_logits))
+            dw_dtheta = weights * (grad_logits - mean_grad)
+
+            r2 = float(x * x + y * y)
+            if r2 <= 1e-12:
+                dtheta_dx = 0.0
+                dtheta_dy = 0.0
+            else:
+                dtheta_dx = -y / r2
+                dtheta_dy = x / r2
+
+            dw_dx = dw_dtheta * dtheta_dx
+            dw_dy = dw_dtheta * dtheta_dy
+
+            softmax_cache.append({
+                "support_theta": theta,
+                "diff": diff,
+                "tau": tau,
+                "logits": logits,
+                "weights": weights,
+                "grad_logits": grad_logits,
+                "dw_dtheta": dw_dtheta,
+                "dw_dx": dw_dx,
+                "dw_dy": dw_dy,
+                "dtheta_dx": dtheta_dx,
+                "dtheta_dy": dtheta_dy,
+            })
+
+        self._last_support_softmax = softmax_cache
+        return weights_all
+
+    def _build_support_constraint_matrix(self, support_weights: List[List[Tuple[int, float]]]) -> np.ndarray:
+        n_supports = len(support_weights)
+        n_dof = len(self.mesh.nodes) * 2
+        C = np.zeros((2 * n_supports, n_dof))
+        for i, weights in enumerate(support_weights):
+            for node_idx, w in weights:
+                C[2 * i, 2 * node_idx] += w
+                C[2 * i + 1, 2 * node_idx + 1] += w
+        return C
+
+    def _assemble_global_stiffness(self) -> np.ndarray:
+        """组装全局刚度矩阵"""
+        n_dof = len(self.mesh.nodes) * 2
+        K_global = np.zeros((n_dof, n_dof))
+
+        for elem_id, element in enumerate(self.mesh.elements):
+            K_elem = self.element_stiffness_matrices[elem_id]
+
+            dofs = []
+            for node in element:
+                dofs.extend([2 * node, 2 * node + 1])
+
+            for i in range(6):
+                for j in range(6):
+                    K_global[dofs[i], dofs[j]] += K_elem[i, j]
+
+        return K_global
 
 
 def test_shell_fea():

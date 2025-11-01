@@ -21,3 +21,8 @@ paper: Truss geometry and topology optimization with global stability constraint
 #    After each optimization cycle, update each joint’s move radius r_j based on the new structure (recompute min distances to connected nodes and apply r_j = min(k * new_min_distance, 0.3)):contentReference[oaicite:14]{index=14}.
 #    If the new design has any nodes that end up too close (or any bars ≤ 0.25 length), merge those nodes before the next iteration to maintain stability:contentReference[oaicite:15]{index=15}:contentReference[oaicite:16]{index=16}.
 #    Continue this iterative refine-and-solve procedure until convergence – e.g. until the design’s volume change is negligible and no extremely short bars (≤ 0.25) remain in the structure:contentReference[oaicite:17]{index=17}.
+
+### 2025-09-26 实现补充
+- `Sequential_Convex_Programming/node_merger.py` 现在会为每个节点记录代表节点，所有指向被合并节点的杆件都会重定向到其代表节点。
+- 仅当两端映射到同一个代表节点（形成零长度杆）时才丢弃该杆件；若多根杆共用同一端点对，则合并并累加截面积，并在累加后对截面做 `A_max` 截断，确保基线仍满足面积上限。
+- 这样避免旧版本直接跳过相关杆件造成的拓扑缺失，有助于减少 MOSEK 求解失败和对称性缺口。
